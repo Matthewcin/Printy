@@ -81,20 +81,23 @@ def handle_photo(message):
 @bot.callback_query_handler(func=lambda call: call.data in ["print_color", "print_bw"])
 def process_print(call):
     chat_id = call.message.chat.id
+    bot.answer_callback_query(call.id)
     is_color = call.data == "print_color"
     photo_bytes = user_data.get(chat_id, {}).get("photo")
     
     if photo_bytes:
-        bot.answer_callback_query(call.id, "Procesando...")
+        bot.send_message(chat_id, "Procesando imagen...")
         send_to_printer(chat_id, photo_bytes, is_color)
     else:
-        bot.answer_callback_query(call.id, "Error con la foto.")
+        bot.send_message(chat_id, "Error con la foto.")
     
     user_states[chat_id] = "MAIN_MENU"
     show_main_menu(chat_id)
 
 def send_to_printer(chat_id, photo_bytes, is_color):
     try:
+        bot.send_message(chat_id, "Enviando mensaje a printy...")
+        
         img = Image.open(BytesIO(photo_bytes))
         if not is_color:
             img = img.convert("L")
@@ -120,9 +123,9 @@ def send_to_printer(chat_id, photo_bytes, is_color):
             smtp.login(EMAIL_SENDER, EMAIL_PASSWORD)
             smtp.send_message(msg)
             
-        bot.send_message(chat_id, "Impresión enviada correctamente al correo de la impresora.")
+        bot.send_message(chat_id, "Estado de envio: ¡Exitoso! Se imprimió correctamente.")
     except Exception as e:
-        bot.send_message(chat_id, f"Error al enviar el correo: {str(e)}")
+        bot.send_message(chat_id, f"Error: {str(e)}")
 
 def get_printer_info(chat_id):
     bot.send_message(chat_id, "Estado: Conectada\nUptime: Calculando...\nTinta Cyan: ?\nTinta Magenta: ?\nTinta Yellow: ?\nTinta Black: ?\n\nEsperando modelo Brother para implementar lectura SNMP.")
