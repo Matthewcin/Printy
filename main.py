@@ -4,7 +4,7 @@ import threading
 import base64
 from io import BytesIO
 
-import requests
+import resend
 import telebot
 from telebot import types
 from PIL import Image
@@ -24,7 +24,7 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 RESEND_API_KEY = os.environ["RESEND_API_KEY"]
 EMAIL_SENDER = os.environ["EMAIL_FROM"]
 
-RESEND_URL = "https://api.resend.com/emails"
+resend.api_key = RESEND_API_KEY
 
 PRINTER_EMAIL = "79404057696@print.brother.com"
 TEST_EMAIL = "pendoo8x@gmail.com"
@@ -34,17 +34,9 @@ TEST_EMAIL = "pendoo8x@gmail.com"
 # RESEND
 # ==============================
 
-class ResendAPIError(Exception):
-    pass
-
-
 def send_email_resend(to, subject, text, attachment=None):
-    """
-    Envia un correo mediante la API HTTPS de Resend.
-    attachment: tupla (nombre_archivo, bytes, tipo_mime)
-    """
 
-    payload = {
+    params = {
         "from": EMAIL_SENDER,
         "to": [to],
         "subject": subject,
@@ -54,54 +46,32 @@ def send_email_resend(to, subject, text, attachment=None):
     if attachment:
         filename, file_bytes, mime_type = attachment
 
-        payload["attachments"] = [{
+        params["attachments"] = [{
             "filename": filename,
-            "content": base64.b64encode(file_bytes).decode("utf-8")
+            "content": base64.b64encode(
+                file_bytes
+            ).decode("utf-8")
         }]
 
-    headers = {
-        "Authorization": f"Bearer {RESEND_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
     try:
-        response = requests.post(
-            RESEND_URL,
-            headers=headers,
-            json=payload,
-            timeout=30
+        response = resend.Emails.send(params)
+
+        if isinstance(response, dict):
+            email_id = response.get("id")
+        else:
+            email_id = getattr(response, "id", None)
+
+        if not email_id:
+            raise Exception(
+                f"Resend no devolvio un ID de envio: {response}"
+            )
+
+        return email_id
+
+    except Exception as e:
+        raise Exception(
+            f"Error de Resend ({type(e).__name__}): {str(e)}"
         )
-
-    except requests.Timeout:
-        raise ResendAPIError(
-            "Tiempo de espera agotado al conectar con Resend."
-        )
-
-    except requests.RequestException as e:
-        raise ResendAPIError(
-            f"Error de conexion con Resend: {type(e).__name__}: {e}"
-        )
-
-    try:
-        result = response.json()
-    except ValueError:
-        result = {"message": response.text[:1000]}
-
-    if not response.ok:
-        raise ResendAPIError(
-            f"Resend rechazo el envio.\n"
-            f"HTTP: {response.status_code}\n"
-            f"Respuesta: {result}"
-        )
-
-    email_id = result.get("id")
-
-    if not email_id:
-        raise ResendAPIError(
-            f"Resend respondio sin un ID de correo: {result}"
-        )
-
-    return email_id
 
 
 # ==============================
@@ -211,7 +181,10 @@ def send_welcome(message):
     if chat_id in auth_users:
         show_main_menu(chat_id)
     else:
-        bot.send_message(chat_id, "Ingrese la contraseña:")
+        bot.send_message(
+            chat_id,
+            "Ingrese la contraseña:"
+        )
 
 
 @bot.message_handler(
@@ -227,7 +200,11 @@ def check_auth(message):
         auth_users.add(chat_id)
         add_auth_user(chat_id)
 
-        bot.send_message(chat_id, "Acceso concedido.")
+        bot.send_message(
+            chat_id,
+            "Acceso concedido."
+        )
+
         show_main_menu(chat_id)
 
     else:
@@ -253,16 +230,19 @@ def handle_menu(message):
         return
 
     if message.text == "IMPRIMIR":
+
         bot.send_message(
             chat_id,
             "Envia la foto a imprimir."
         )
 
     elif message.text == "TEST EMAIL":
+
         bot.send_message(
             chat_id,
             "Enviando correo de prueba mediante Resend..."
         )
+
         send_test_email(chat_id)
 
 
@@ -271,6 +251,7 @@ def handle_menu(message):
 # ==============================
 
 def send_test_email(chat_id):
+
     try:
         email_id = send_email_resend(
             to=TEST_EMAIL,
@@ -285,20 +266,14 @@ def send_test_email(chat_id):
             "Asunto: PING\n"
             "Mensaje: ESTE BOT FUNCIONA!\n\n"
             f"ID del correo: {email_id}\n\n"
-            "Revisa la bandeja de entrada y spam."
-        )
-
-    except ResendAPIError as e:
-        bot.send_message(
-            chat_id,
-            "ERROR AL ENVIAR EL CORREO\n\n"
-            f"{str(e)}"
+            "Revisa tu bandeja de entrada y spam."
         )
 
     except Exception as e:
+
         bot.send_message(
             chat_id,
-            "ERROR INESPERADO\n\n"
+            "ERROR AL ENVIAR EL CORREO\n\n"
             f"Tipo: {type(e).__name__}\n"
             f"Detalle: {str(e)}"
         )
@@ -310,14 +285,20 @@ def send_test_email(chat_id):
 
 @bot.message_handler(content_types=["photo"])
 def handle_photo(message):
+
     chat_id = message.chat.id
 
     if chat_id not in auth_users:
         return
 
     try:
-        file_info = bot.get_file(message.photo[-1].file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
+        file_info = bot.get_file(
+            message.photo[-1].file_id
+        )
+
+        downloaded_file = bot.download_file(
+            file_info.file_path
+        )
 
         user_data[chat_id] = {
             "photo": downloaded_file
@@ -343,9 +324,10 @@ def handle_photo(message):
         )
 
     except Exception as e:
+
         bot.send_message(
             chat_id,
-            f"Error al recibir la foto: {e}"
+            f"Error al recibir la foto: {str(e)}"
         )
 
 
@@ -355,6 +337,7 @@ def handle_photo(message):
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
+
     chat_id = call.message.chat.id
 
     bot.answer_callback_query(call.id)
@@ -371,6 +354,7 @@ def handle_callbacks(call):
         ).get("photo")
 
         if photo_bytes:
+
             bot.send_message(
                 chat_id,
                 "Procesando imagen..."
@@ -385,6 +369,7 @@ def handle_callbacks(call):
             user_data.pop(chat_id, None)
 
         else:
+
             bot.send_message(
                 chat_id,
                 "Error: No se encontro la foto. Vuelve a enviarla."
@@ -398,13 +383,16 @@ def handle_callbacks(call):
 # ==============================
 
 def send_to_printer(chat_id, photo_bytes, is_color):
+
     try:
         bot.send_message(
             chat_id,
-            "Enviando imagen a la impresora mediante Resend..."
+            "Procesando imagen para la impresora..."
         )
 
-        img = Image.open(BytesIO(photo_bytes))
+        img = Image.open(
+            BytesIO(photo_bytes)
+        )
 
         if not is_color:
             img = img.convert("L")
@@ -442,21 +430,15 @@ def send_to_printer(chat_id, photo_bytes, is_color):
             "CORREO ACEPTADO POR RESEND\n\n"
             "Destinatario: impresora Brother\n"
             f"ID del correo: {email_id}\n\n"
-            "Resend acepto el envio. Esto no confirma "
-            "todavia que la impresora haya terminado de imprimir."
-        )
-
-    except ResendAPIError as e:
-        bot.send_message(
-            chat_id,
-            "ERROR DE RESEND AL ENVIAR A LA IMPRESORA\n\n"
-            f"{str(e)}"
+            "Resend acepto el envio. "
+            "La impresion todavia debe ser confirmada por la impresora."
         )
 
     except Exception as e:
+
         bot.send_message(
             chat_id,
-            "ERROR AL PROCESAR O ENVIAR LA IMAGEN\n\n"
+            "ERROR AL ENVIAR A LA IMPRESORA\n\n"
             f"Tipo: {type(e).__name__}\n"
             f"Detalle: {str(e)}"
         )
