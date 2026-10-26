@@ -1,7 +1,7 @@
-
 import os
 import threading
 import base64
+import mimetypes
 from io import BytesIO
 
 import resend
@@ -26,7 +26,7 @@ EMAIL_SENDER = os.environ["EMAIL_FROM"]
 
 resend.api_key = RESEND_API_KEY
 
-PRINTER_EMAIL = "yellower@print.brother.com"
+PRINTER_EMAIL = "79404057696@print.brother.com"
 
 MAX_FILES = 10
 MAX_TOTAL_SIZE = 20 * 1024 * 1024  # 20 MB
@@ -40,7 +40,6 @@ ALLOWED_EXTENSIONS = {
     ".ppt", ".pptx"
 }
 
-# Imagenes que podemos convertir a blanco y negro
 CONVERTIBLE_IMAGES = {
     ".jpg", ".jpeg", ".png", ".bmp"
 }
@@ -60,17 +59,21 @@ def send_email_resend(to, subject, text, attachments=None):
     }
 
     if attachments:
+
         params["attachments"] = []
 
         for filename, file_bytes, mime_type in attachments:
+
             params["attachments"].append({
                 "filename": filename,
                 "content": base64.b64encode(
                     file_bytes
-                ).decode("utf-8")
+                ).decode("utf-8"),
+                "content_type": mime_type
             })
 
     try:
+
         response = resend.Emails.send(params)
 
         if isinstance(response, dict):
@@ -86,6 +89,7 @@ def send_email_resend(to, subject, text, attachments=None):
         return email_id
 
     except Exception as e:
+
         raise Exception(
             f"Error de Resend ({type(e).__name__}): {str(e)}"
         )
@@ -96,6 +100,7 @@ def send_email_resend(to, subject, text, attachments=None):
 # ==============================
 
 def init_db():
+
     conn = psycopg2.connect(DATABASE_URL)
     cur = conn.cursor()
 
@@ -111,6 +116,7 @@ def init_db():
 
 
 def get_auth_users():
+
     conn = psycopg2.connect(DATABASE_URL)
     cur = conn.cursor()
 
@@ -124,6 +130,7 @@ def get_auth_users():
 
 
 def add_auth_user(chat_id):
+
     conn = psycopg2.connect(DATABASE_URL)
     cur = conn.cursor()
 
@@ -154,8 +161,13 @@ def home():
 
 
 def run_server():
+
     port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+
+    app.run(
+        host="0.0.0.0",
+        port=port
+    )
 
 
 # ==============================
@@ -169,7 +181,7 @@ user_data = {}
 
 
 # ==============================
-# TECLADOS
+# MENU PRINCIPAL
 # ==============================
 
 def show_main_menu(chat_id):
@@ -178,8 +190,9 @@ def show_main_menu(chat_id):
         resize_keyboard=True
     )
 
-    markup.add(
-        types.KeyboardButton("IMPRIMIR")
+    markup.row(
+        types.KeyboardButton("IMPRIMIR"),
+        types.KeyboardButton("GUIA")
     )
 
     bot.send_message(
@@ -188,6 +201,10 @@ def show_main_menu(chat_id):
         reply_markup=markup
     )
 
+
+# ==============================
+# MENU DE IMPRESION
+# ==============================
 
 def show_print_menu(chat_id):
 
@@ -207,6 +224,214 @@ def show_print_menu(chat_id):
         reply_markup=markup
     )
 
+
+# ==============================
+# GUIA
+# ==============================
+
+def show_guide(chat_id):
+
+    guide = (
+        "📖 GUIA DE IMPRESION\n\n"
+
+        "📁 ARCHIVOS ADMITIDOS\n\n"
+
+        "DOCUMENTOS:\n"
+        "• PDF\n"
+        "• TXT\n"
+        "• DOC / DOCX\n"
+        "• XLS / XLSX\n"
+        "• PPT / PPTX\n\n"
+
+        "IMAGENES:\n"
+        "• JPG / JPEG\n"
+        "• PNG\n"
+        "• BMP\n"
+        "• GIF\n"
+        "• TIF / TIFF\n\n"
+
+        "📦 LIMITES POR ENVIO\n\n"
+        "• Maximo 10 archivos por tanda.\n"
+        "• Maximo 20 MB en total por correo.\n"
+        "• Puedes enviar los archivos uno por uno.\n"
+        "• Tambien puedes enviar imagenes como documentos "
+        "para conservar su calidad original.\n\n"
+
+        "📄 TAMAÑOS DE ARCHIVO\n\n"
+        "• El limite total de la tanda es de 20 MB.\n"
+        "• El tamaño de cada archivo debe permitir "
+        "respetar ese limite.\n"
+        "• Telegram tambien aplica sus propios limites "
+        "para la descarga de archivos.\n\n"
+
+        "🖨️ MODOS DE IMPRESION\n\n"
+        "• Color.\n"
+        "• Blanco y Negro.\n\n"
+
+        "📌 COMO IMPRIMIR\n\n"
+        "1. Pulsa IMPRIMIR.\n"
+        "2. Envia tus archivos uno por uno.\n"
+        "3. Comprueba que todos se hayan recibido.\n"
+        "4. Pulsa CONFIRMAR IMPRESION.\n"
+        "5. Selecciona Color o Blanco y Negro.\n"
+        "6. Espera la confirmacion del envio.\n\n"
+
+        "⚠️ INFORMACION IMPORTANTE\n\n"
+        "• Los documentos se envian en su formato original.\n"
+        "• En Blanco y Negro se convierten las imagenes "
+        "compatibles a escala de grises.\n"
+        "• Los PDF y documentos no se modifican.\n"
+        "• El tamaño de papel y otras opciones dependen "
+        "del documento y de la configuracion de la Brother.\n"
+        "• La aceptacion del correo no garantiza que "
+        "la impresora haya terminado de imprimir.\n\n"
+
+        "Para comenzar, vuelve al menu y pulsa IMPRIMIR."
+    )
+
+    bot.send_message(
+        chat_id,
+        guide
+    )
+
+
+# ==============================
+# AUTENTICACION
+# ==============================
+
+@bot.message_handler(commands=["start"])
+def send_welcome(message):
+
+    chat_id = message.chat.id
+
+    if chat_id in auth_users:
+
+        show_main_menu(chat_id)
+
+    else:
+
+        bot.send_message(
+            chat_id,
+            "Ingrese la contraseña:"
+        )
+
+
+@bot.message_handler(
+    func=lambda message: message.chat.id not in auth_users
+)
+def check_auth(message):
+
+    chat_id = message.chat.id
+
+    if (
+        message.content_type == "text"
+        and message.text == PASSWORD
+    ):
+
+        auth_users.add(chat_id)
+
+        add_auth_user(chat_id)
+
+        bot.send_message(
+            chat_id,
+            "Acceso concedido."
+        )
+
+        show_main_menu(chat_id)
+
+    else:
+
+        bot.send_message(
+            chat_id,
+            "Contraseña incorrecta. Ingrese la contraseña:"
+        )
+
+
+# ==============================
+# MENU DE OPCIONES
+# ==============================
+
+@bot.message_handler(
+    func=lambda message:
+        message.content_type == "text"
+        and message.text in [
+            "IMPRIMIR",
+            "GUIA",
+            "CONFIRMAR IMPRESION",
+            "CANCELAR"
+        ]
+)
+def handle_menu(message):
+
+    chat_id = message.chat.id
+
+    if chat_id not in auth_users:
+        return
+
+    if message.text == "IMPRIMIR":
+
+        user_data[chat_id] = {
+            "files": [],
+            "total_size": 0,
+            "collecting": True
+        }
+
+        bot.send_message(
+            chat_id,
+            "📥 ENVIAR ARCHIVOS\n\n"
+            "Puedes enviar hasta 10 archivos "
+            "con un maximo de 20 MB en total.\n\n"
+            "Envia tus documentos o fotografias "
+            "uno por uno."
+        )
+
+        show_print_menu(chat_id)
+
+    elif message.text == "GUIA":
+
+        show_guide(chat_id)
+
+    elif message.text == "CONFIRMAR IMPRESION":
+
+        data = user_data.get(chat_id)
+
+        if not data or not data.get("files"):
+
+            bot.send_message(
+                chat_id,
+                "Todavia no has enviado ningun archivo."
+            )
+
+            return
+
+        if not data.get("collecting"):
+
+            bot.send_message(
+                chat_id,
+                "Ya has confirmado esta tanda."
+            )
+
+            return
+
+        data["collecting"] = False
+
+        show_print_mode(chat_id)
+
+    elif message.text == "CANCELAR":
+
+        user_data.pop(chat_id, None)
+
+        bot.send_message(
+            chat_id,
+            "Impresion cancelada."
+        )
+
+        show_main_menu(chat_id)
+
+
+# ==============================
+# MODO DE IMPRESION
+# ==============================
 
 def show_print_mode(chat_id):
 
@@ -231,121 +456,6 @@ def show_print_mode(chat_id):
 
 
 # ==============================
-# AUTENTICACION
-# ==============================
-
-@bot.message_handler(commands=["start"])
-def send_welcome(message):
-
-    chat_id = message.chat.id
-
-    if chat_id in auth_users:
-        show_main_menu(chat_id)
-
-    else:
-        bot.send_message(
-            chat_id,
-            "Ingrese la contraseña:"
-        )
-
-
-@bot.message_handler(
-    func=lambda message: message.chat.id not in auth_users
-)
-def check_auth(message):
-
-    chat_id = message.chat.id
-
-    if (
-        message.content_type == "text"
-        and message.text == PASSWORD
-    ):
-        auth_users.add(chat_id)
-        add_auth_user(chat_id)
-
-        bot.send_message(
-            chat_id,
-            "Acceso concedido."
-        )
-
-        show_main_menu(chat_id)
-
-    else:
-        bot.send_message(
-            chat_id,
-            "Contraseña incorrecta. Ingrese la contraseña:"
-        )
-
-
-# ==============================
-# MENU PRINCIPAL
-# ==============================
-
-@bot.message_handler(
-    func=lambda message:
-        message.content_type == "text"
-        and message.text in [
-            "IMPRIMIR",
-            "CONFIRMAR IMPRESION",
-            "CANCELAR"
-        ]
-)
-def handle_menu(message):
-
-    chat_id = message.chat.id
-
-    if chat_id not in auth_users:
-        return
-
-    if message.text == "IMPRIMIR":
-
-        user_data[chat_id] = {
-            "files": [],
-            "total_size": 0,
-            "collecting": True
-        }
-
-        bot.send_message(
-            chat_id,
-            "ENVIAR ARCHIVOS\n\n"
-            "Puedes enviar fotografias y documentos.\n"
-            "Maximo: 10 archivos y 20 MB en total.\n\n"
-            "Formatos admitidos:\n"
-            "PDF, JPG, PNG, BMP, GIF, TIFF, TXT, "
-            "DOC, DOCX, XLS, XLSX, PPT y PPTX.\n\n"
-            "Envia los archivos uno por uno."
-        )
-
-        show_print_menu(chat_id)
-
-    elif message.text == "CONFIRMAR IMPRESION":
-
-        data = user_data.get(chat_id)
-
-        if not data or not data.get("files"):
-            bot.send_message(
-                chat_id,
-                "Todavia no has enviado ningun archivo."
-            )
-            return
-
-        data["collecting"] = False
-
-        show_print_mode(chat_id)
-
-    elif message.text == "CANCELAR":
-
-        user_data.pop(chat_id, None)
-
-        bot.send_message(
-            chat_id,
-            "Impresion cancelada."
-        )
-
-        show_main_menu(chat_id)
-
-
-# ==============================
 # AGREGAR ARCHIVOS A LA TANDA
 # ==============================
 
@@ -354,36 +464,44 @@ def add_file_to_batch(chat_id, filename, file_bytes):
     data = user_data.get(chat_id)
 
     if not data or not data.get("collecting"):
+
         bot.send_message(
             chat_id,
             "Primero pulsa IMPRIMIR para iniciar una tanda."
         )
+
         return
 
     extension = os.path.splitext(filename)[1].lower()
 
     if extension not in ALLOWED_EXTENSIONS:
+
         bot.send_message(
             chat_id,
             f"Formato no admitido: {extension or 'desconocido'}"
         )
+
         return
 
     if len(data["files"]) >= MAX_FILES:
+
         bot.send_message(
             chat_id,
             "Has alcanzado el limite de 10 archivos."
         )
+
         return
 
     file_size = len(file_bytes)
 
     if data["total_size"] + file_size > MAX_TOTAL_SIZE:
+
         bot.send_message(
             chat_id,
-            "Este archivo supera el limite disponible.\n"
+            "Este archivo supera el espacio disponible.\n"
             "El maximo total es de 20 MB."
         )
+
         return
 
     data["files"].append({
@@ -398,13 +516,14 @@ def add_file_to_batch(chat_id, filename, file_bytes):
 
     bot.send_message(
         chat_id,
-        "ARCHIVO RECIBIDO\n\n"
+        "✅ ARCHIVO RECIBIDO\n\n"
         f"Nombre: {filename}\n"
         f"Archivos: {len(data['files'])}/{MAX_FILES}\n"
         f"Tamano total: {total_mb:.2f} MB / 20 MB"
     )
 
     if len(data["files"]) >= MAX_FILES:
+
         bot.send_message(
             chat_id,
             "Has alcanzado los 10 archivos. "
@@ -425,16 +544,10 @@ def handle_photo(message):
         return
 
     try:
+
         file_info = bot.get_file(
             message.photo[-1].file_id
         )
-
-        if file_info.file_size and file_info.file_size > MAX_TOTAL_SIZE:
-            bot.send_message(
-                chat_id,
-                "La fotografia supera el limite permitido."
-            )
-            return
 
         downloaded_file = bot.download_file(
             file_info.file_path
@@ -471,6 +584,7 @@ def handle_document(message):
         return
 
     try:
+
         document = message.document
 
         filename = document.file_name or "documento"
@@ -478,21 +592,30 @@ def handle_document(message):
         extension = os.path.splitext(filename)[1].lower()
 
         if extension not in ALLOWED_EXTENSIONS:
+
             bot.send_message(
                 chat_id,
                 "Formato no admitido.\n"
-                "Envia PDF, imagenes u otro documento imprimible."
+                "Consulta GUIA para ver los formatos disponibles."
             )
+
             return
 
-        if document.file_size and document.file_size > MAX_TOTAL_SIZE:
+        if (
+            document.file_size
+            and document.file_size > MAX_TOTAL_SIZE
+        ):
+
             bot.send_message(
                 chat_id,
                 "El archivo supera el limite de 20 MB."
             )
+
             return
 
-        file_info = bot.get_file(document.file_id)
+        file_info = bot.get_file(
+            document.file_id
+        )
 
         downloaded_file = bot.download_file(
             file_info.file_path
@@ -526,7 +649,8 @@ def prepare_attachments(files, is_color):
         file_bytes = file["bytes"]
         extension = file["extension"]
 
-        # Convertimos imagenes compatibles a blanco y negro
+        # Convertir imagenes compatibles a blanco y negro
+
         if (
             not is_color
             and extension in CONVERTIBLE_IMAGES
@@ -546,13 +670,21 @@ def prepare_attachments(files, is_color):
                 quality=95
             )
 
-            filename = os.path.splitext(filename)[0] + ".jpg"
+            filename = (
+                os.path.splitext(filename)[0] + ".jpg"
+            )
+
             file_bytes = output.getvalue()
+
+        mime_type, _ = mimetypes.guess_type(filename)
+
+        if not mime_type:
+            mime_type = "application/octet-stream"
 
         attachments.append((
             filename,
             file_bytes,
-            "application/octet-stream"
+            mime_type
         ))
 
     return attachments
@@ -588,7 +720,7 @@ def send_to_printer(chat_id, files, is_color):
 
         bot.send_message(
             chat_id,
-            "CORREO ACEPTADO POR RESEND\n\n"
+            "✅ CORREO ACEPTADO POR RESEND\n\n"
             "Destinatario: impresora Brother\n"
             f"Archivos enviados: {len(attachments)}\n"
             f"ID del correo: {email_id}\n\n"
@@ -601,7 +733,7 @@ def send_to_printer(chat_id, files, is_color):
 
         bot.send_message(
             chat_id,
-            "ERROR AL ENVIAR A LA IMPRESORA\n\n"
+            "❌ ERROR AL ENVIAR A LA IMPRESORA\n\n"
             f"Tipo: {type(e).__name__}\n"
             f"Detalle: {str(e)}"
         )
@@ -636,13 +768,22 @@ def handle_callbacks(call):
             )
 
             show_main_menu(chat_id)
+
+            return
+
+        if data.get("collecting"):
+
+            bot.send_message(
+                chat_id,
+                "Primero confirma la tanda de impresion."
+            )
+
             return
 
         is_color = call.data == "print_color"
 
         files = data["files"]
 
-        # Liberamos los archivos de la sesion
         user_data.pop(chat_id, None)
 
         send_to_printer(
@@ -658,14 +799,19 @@ def handle_callbacks(call):
 # CORREO DE PRUEBA DESACTIVADO
 # ==============================
 
-# De momento se desactiva el correo de prueba.
-# Para volver a utilizarlo, descomentar esta seccion
-# y agregar nuevamente el boton TEST EMAIL al menu.
+# De momento el correo de prueba esta desactivado.
+#
+# Para volver a habilitarlo:
+# 1. Agregar el boton TEST EMAIL al menu principal.
+# 2. Agregar TEST EMAIL al controlador handle_menu.
+# 3. Descomentar la funcion send_test_email.
 #
 # TEST_EMAIL = "pendoo8x@gmail.com"
 #
 # def send_test_email(chat_id):
+#
 #     try:
+#
 #         email_id = send_email_resend(
 #             to=TEST_EMAIL,
 #             subject="PING",
@@ -680,6 +826,7 @@ def handle_callbacks(call):
 #         )
 #
 #     except Exception as e:
+#
 #         bot.send_message(
 #             chat_id,
 #             "ERROR AL ENVIAR EL CORREO\n\n"
