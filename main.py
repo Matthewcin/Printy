@@ -1077,21 +1077,8 @@ if __name__ == "__main__":
 
     init_db()
 
-    # Adquirir el bloqueo antes de iniciar Telegram.
-    acquire_bot_lock()
-
-    # Cargar usuarios autorizados.
     auth_users = get_auth_users()
 
-    # Iniciar renovacion del bloqueo.
-    lock_thread = threading.Thread(
-        target=lock_heartbeat,
-        daemon=True
-    )
-
-    lock_thread.start()
-
-    # Iniciar servidor web para Render.
     server_thread = threading.Thread(
         target=run_server,
         daemon=True
@@ -1114,18 +1101,4 @@ if __name__ == "__main__":
         print("Cierre solicitado.")
 
     finally:
-
-        lock_stop_event.set()
-
-        if lock_thread:
-            lock_thread.join(timeout=5)
-
-        try:
-            release_bot_lock()
-
-        except Exception as e:
-
-            print(
-                "No se pudo liberar el bloqueo: "
-                f"{type(e).__name__}: {e}"
-            )
+        print("Apagando bot...")
