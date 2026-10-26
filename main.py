@@ -1,9 +1,12 @@
+import os
+import threading
+import smtplib
+from email.message import EmailMessage
+from io import BytesIO
 import telebot
 from telebot import types
 from PIL import Image
-from io import BytesIO
-import smtplib
-from email.message import EmailMessage
+from flask import Flask
 
 TOKEN = "8837741358:AAFckJCvuACBT4-KIyNp7WqxQ69YEQEYSXY"
 PASSWORD = "160620"
@@ -12,6 +15,16 @@ EMAIL_SENDER = "printythebot@outlook.com"
 EMAIL_PASSWORD = "lybjezesstkmwmzb"
 SMTP_SERVER = "smtp-mail.outlook.com"
 SMTP_PORT = 587
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot de impresion activo"
+
+def run_server():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
 
 bot = telebot.TeleBot(TOKEN)
 auth_users = set()
@@ -119,4 +132,7 @@ def show_config_menu(chat_id):
     markup.add(types.InlineKeyboardButton("Modo Ahorro", callback_data="cfg_ahorro"), types.InlineKeyboardButton("Limpieza de Cabezales", callback_data="cfg_limpieza"))
     bot.send_message(chat_id, "Opciones de configuración (Esperando modelo):", reply_markup=markup)
 
-bot.polling()
+if __name__ == "__main__":
+    server_thread = threading.Thread(target=run_server)
+    server_thread.start()
+    bot.polling(non_stop=True)
