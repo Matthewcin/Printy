@@ -55,8 +55,12 @@ def run_server():
 
 bot = telebot.TeleBot(TOKEN)
 auth_users = set()
-user_states = {}
 user_data = {}
+
+def show_main_menu(chat_id):
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(types.KeyboardButton("IMPRIMIR"), types.KeyboardButton("INFORMACION"), types.KeyboardButton("CONFIGURACION"))
+    bot.send_message(chat_id, "Menú principal:", reply_markup=markup)
 
 @bot.message_handler(commands=["start"])
 def send_welcome(message):
@@ -64,27 +68,23 @@ def send_welcome(message):
     if chat_id in auth_users:
         show_main_menu(chat_id)
     else:
-        user_states[chat_id] = "WAITING_PASSWORD"
         bot.send_message(chat_id, "Ingrese la contraseña:")
 
 @bot.message_handler(func=lambda message: message.chat.id not in auth_users)
 def check_auth(message):
     chat_id = message.chat.id
-    if message.text == PASSWORD:
+    if message.content_type == 'text' and message.text == PASSWORD:
         auth_users.add(chat_id)
         add_auth_user(chat_id)
-        user_states[chat_id] = "MAIN_MENU"
         bot.send_message(chat_id, "Acceso concedido.")
         show_main_menu(chat_id)
     else:
-        user_states[chat_id] = "WAITING_PASSWORD"
-        bot.send_message(chat_id, "Sesión reiniciada o contraseña incorrecta. Ingrese la contraseña:")
+        bot.send_message(chat_id, "Contraseña incorrecta o sesión reiniciada. Ingrese la contraseña:")
 
-@bot.message_handler(func=lambda message: message.text in ["IMPRIMIR", "INFORMACION", "CONFIGURACION"])
+@bot.message_handler(func=lambda message: message.content_type == 'text' and message.text in ["IMPRIMIR", "INFORMACION", "CONFIGURACION"])
 def handle_menu(message):
     chat_id = message.chat.id
     if message.text == "IMPRIMIR":
-        user_states[chat_id] = "WAITING_PHOTO"
         bot.send_message(chat_id, "Envía la foto a imprimir.")
     elif message.text == "INFORMACION":
         get_printer_info(chat_id)
@@ -94,7 +94,7 @@ def handle_menu(message):
 @bot.message_handler(content_types=["photo"])
 def handle_photo(message):
     chat_id = message.chat.id
-    if user_states.get(chat_id) == "WAITING_PHOTO":
+    if chat_id in auth_users:
         file_info = bot.get_file(message.photo[-1].file_id)
         downloaded_file = bot.download_file(file_info.file_path)
         user_data[chat_id] = {"photo": downloaded_file}
@@ -116,9 +116,8 @@ def handle_callbacks(call):
             bot.send_message(chat_id, "Procesando imagen...")
             send_to_printer(chat_id, photo_bytes, is_color)
         else:
-            bot.send_message(chat_id, "Error: No se encontró la foto.")
+            bot.send_message(chat_id, "Error: No se encontró la foto en memoria temporal. Vuelve a enviarla.")
         
-        user_states[chat_id] = "MAIN_MENU"
         show_main_menu(chat_id)
     elif call.data.startswith("cfg_"):
         bot.send_message(chat_id, "Función de configuración en espera del modelo exacto de la impresora.")
