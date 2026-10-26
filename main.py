@@ -5,6 +5,7 @@ import mimetypes
 import uuid
 import time
 import requests
+import fitz
 
 from telebot.apihelper import ApiTelegramException
 from io import BytesIO
@@ -59,6 +60,53 @@ INSTANCE_ID = str(uuid.uuid4())
 lock_stop_event = threading.Event()
 lock_thread = None
 
+# ==============================
+# CONVERSOR B&N PDF
+# ==============================
+
+def convert_pdf_to_bw(file_bytes, dpi=200):
+
+    source_pdf = fitz.open(
+        stream=file_bytes,
+        filetype="pdf"
+    )
+
+    output_pdf = fitz.open()
+
+    try:
+        for page in source_pdf:
+
+            pix = page.get_pixmap(
+                dpi=dpi,
+                colorspace=fitz.csGRAY,
+                alpha=False
+            )
+
+            image_bytes = pix.tobytes("png")
+
+            new_page = output_pdf.new_page(
+                width=page.rect.width,
+                height=page.rect.height
+            )
+
+            new_page.insert_image(
+                new_page.rect,
+                stream=image_bytes
+            )
+
+        output = BytesIO()
+
+        output_pdf.save(
+            output,
+            garbage=4,
+            deflate=True
+        )
+
+        return output.getvalue()
+
+    finally:
+        source_pdf.close()
+        output_pdf.close()
 
 # ==============================
 # BASE DE DATOS
@@ -1161,9 +1209,12 @@ def prepare_attachments(files, mode):
         file_bytes = file["bytes"]
         extension = file["extension"]
 
-        # BLANCO Y NEGRO:
-        # Convertir imágenes compatibles con Pillow.
+        # PDF A BLANCO Y NEGRO
+        if mode == "bw" and extension == ".pdf":
 
+            file_bytes = convert_pdf_to_bw(file_bytes)
+
+        # IMÁGENES A BLANCO Y NEGRO
         if mode == "bw" and extension in CONVERTIBLE_IMAGES:
 
             with Image.open(BytesIO(file_bytes)) as original:
