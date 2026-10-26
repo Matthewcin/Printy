@@ -26,15 +26,31 @@ EMAIL_SENDER = os.environ["EMAIL_FROM"]
 
 resend.api_key = RESEND_API_KEY
 
-PRINTER_EMAIL = "79404057696@print.brother.com"
-TEST_EMAIL = "pendoo8x@gmail.com"
+PRINTER_EMAIL = "yellower@print.brother.com"
+
+MAX_FILES = 10
+MAX_TOTAL_SIZE = 20 * 1024 * 1024  # 20 MB
+
+ALLOWED_EXTENSIONS = {
+    ".pdf",
+    ".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tif", ".tiff",
+    ".txt",
+    ".doc", ".docx",
+    ".xls", ".xlsx",
+    ".ppt", ".pptx"
+}
+
+# Imagenes que podemos convertir a blanco y negro
+CONVERTIBLE_IMAGES = {
+    ".jpg", ".jpeg", ".png", ".bmp"
+}
 
 
 # ==============================
 # RESEND
 # ==============================
 
-def send_email_resend(to, subject, text, attachment=None):
+def send_email_resend(to, subject, text, attachments=None):
 
     params = {
         "from": EMAIL_SENDER,
@@ -43,15 +59,16 @@ def send_email_resend(to, subject, text, attachment=None):
         "text": text
     }
 
-    if attachment:
-        filename, file_bytes, mime_type = attachment
+    if attachments:
+        params["attachments"] = []
 
-        params["attachments"] = [{
-            "filename": filename,
-            "content": base64.b64encode(
-                file_bytes
-            ).decode("utf-8")
-        }]
+        for filename, file_bytes, mime_type in attachments:
+            params["attachments"].append({
+                "filename": filename,
+                "content": base64.b64encode(
+                    file_bytes
+                ).decode("utf-8")
+            })
 
     try:
         response = resend.Emails.send(params)
@@ -152,20 +169,63 @@ user_data = {}
 
 
 # ==============================
-# MENU PRINCIPAL
+# TECLADOS
 # ==============================
 
 def show_main_menu(chat_id):
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+
+    markup = types.ReplyKeyboardMarkup(
+        resize_keyboard=True
+    )
 
     markup.add(
-        types.KeyboardButton("IMPRIMIR"),
-        types.KeyboardButton("TEST EMAIL")
+        types.KeyboardButton("IMPRIMIR")
     )
 
     bot.send_message(
         chat_id,
         "Menu principal:",
+        reply_markup=markup
+    )
+
+
+def show_print_menu(chat_id):
+
+    markup = types.ReplyKeyboardMarkup(
+        resize_keyboard=True
+    )
+
+    markup.row(
+        types.KeyboardButton("CONFIRMAR IMPRESION"),
+        types.KeyboardButton("CANCELAR")
+    )
+
+    bot.send_message(
+        chat_id,
+        "Cuando hayas enviado todos los archivos, "
+        "pulsa CONFIRMAR IMPRESION.",
+        reply_markup=markup
+    )
+
+
+def show_print_mode(chat_id):
+
+    markup = types.InlineKeyboardMarkup()
+
+    markup.add(
+        types.InlineKeyboardButton(
+            "Color",
+            callback_data="print_color"
+        ),
+        types.InlineKeyboardButton(
+            "Blanco y Negro",
+            callback_data="print_bw"
+        )
+    )
+
+    bot.send_message(
+        chat_id,
+        "Seleccione el modo de impresion:",
         reply_markup=markup
     )
 
@@ -176,10 +236,12 @@ def show_main_menu(chat_id):
 
 @bot.message_handler(commands=["start"])
 def send_welcome(message):
+
     chat_id = message.chat.id
 
     if chat_id in auth_users:
         show_main_menu(chat_id)
+
     else:
         bot.send_message(
             chat_id,
@@ -191,6 +253,7 @@ def send_welcome(message):
     func=lambda message: message.chat.id not in auth_users
 )
 def check_auth(message):
+
     chat_id = message.chat.id
 
     if (
@@ -215,15 +278,20 @@ def check_auth(message):
 
 
 # ==============================
-# MENU DE OPCIONES
+# MENU PRINCIPAL
 # ==============================
 
 @bot.message_handler(
     func=lambda message:
         message.content_type == "text"
-        and message.text in ["IMPRIMIR", "TEST EMAIL"]
+        and message.text in [
+            "IMPRIMIR",
+            "CONFIRMAR IMPRESION",
+            "CANCELAR"
+        ]
 )
 def handle_menu(message):
+
     chat_id = message.chat.id
 
     if chat_id not in auth_users:
@@ -231,51 +299,116 @@ def handle_menu(message):
 
     if message.text == "IMPRIMIR":
 
+        user_data[chat_id] = {
+            "files": [],
+            "total_size": 0,
+            "collecting": True
+        }
+
         bot.send_message(
             chat_id,
-            "Envia la foto a imprimir."
+            "ENVIAR ARCHIVOS\n\n"
+            "Puedes enviar fotografias y documentos.\n"
+            "Maximo: 10 archivos y 20 MB en total.\n\n"
+            "Formatos admitidos:\n"
+            "PDF, JPG, PNG, BMP, GIF, TIFF, TXT, "
+            "DOC, DOCX, XLS, XLSX, PPT y PPTX.\n\n"
+            "Envia los archivos uno por uno."
         )
 
-    elif message.text == "TEST EMAIL":
+        show_print_menu(chat_id)
+
+    elif message.text == "CONFIRMAR IMPRESION":
+
+        data = user_data.get(chat_id)
+
+        if not data or not data.get("files"):
+            bot.send_message(
+                chat_id,
+                "Todavia no has enviado ningun archivo."
+            )
+            return
+
+        data["collecting"] = False
+
+        show_print_mode(chat_id)
+
+    elif message.text == "CANCELAR":
+
+        user_data.pop(chat_id, None)
 
         bot.send_message(
             chat_id,
-            "Enviando correo de prueba mediante Resend..."
+            "Impresion cancelada."
         )
 
-        send_test_email(chat_id)
+        show_main_menu(chat_id)
 
 
 # ==============================
-# CORREO DE PRUEBA
+# AGREGAR ARCHIVOS A LA TANDA
 # ==============================
 
-def send_test_email(chat_id):
+def add_file_to_batch(chat_id, filename, file_bytes):
 
-    try:
-        email_id = send_email_resend(
-            to=TEST_EMAIL,
-            subject="PING",
-            text="ESTE BOT FUNCIONA!"
-        )
+    data = user_data.get(chat_id)
 
+    if not data or not data.get("collecting"):
         bot.send_message(
             chat_id,
-            "CORREO ACEPTADO POR RESEND\n\n"
-            f"Destinatario: {TEST_EMAIL}\n"
-            "Asunto: PING\n"
-            "Mensaje: ESTE BOT FUNCIONA!\n\n"
-            f"ID del correo: {email_id}\n\n"
-            "Revisa tu bandeja de entrada y spam."
+            "Primero pulsa IMPRIMIR para iniciar una tanda."
         )
+        return
 
-    except Exception as e:
+    extension = os.path.splitext(filename)[1].lower()
 
+    if extension not in ALLOWED_EXTENSIONS:
         bot.send_message(
             chat_id,
-            "ERROR AL ENVIAR EL CORREO\n\n"
-            f"Tipo: {type(e).__name__}\n"
-            f"Detalle: {str(e)}"
+            f"Formato no admitido: {extension or 'desconocido'}"
+        )
+        return
+
+    if len(data["files"]) >= MAX_FILES:
+        bot.send_message(
+            chat_id,
+            "Has alcanzado el limite de 10 archivos."
+        )
+        return
+
+    file_size = len(file_bytes)
+
+    if data["total_size"] + file_size > MAX_TOTAL_SIZE:
+        bot.send_message(
+            chat_id,
+            "Este archivo supera el limite disponible.\n"
+            "El maximo total es de 20 MB."
+        )
+        return
+
+    data["files"].append({
+        "filename": filename,
+        "bytes": file_bytes,
+        "extension": extension
+    })
+
+    data["total_size"] += file_size
+
+    total_mb = data["total_size"] / (1024 * 1024)
+
+    bot.send_message(
+        chat_id,
+        "ARCHIVO RECIBIDO\n\n"
+        f"Nombre: {filename}\n"
+        f"Archivos: {len(data['files'])}/{MAX_FILES}\n"
+        f"Tamano total: {total_mb:.2f} MB / 20 MB"
+    )
+
+    if len(data["files"]) >= MAX_FILES:
+        bot.send_message(
+            chat_id,
+            "Has alcanzado los 10 archivos. "
+            "Puedes confirmar la impresion."
         )
 
 
@@ -296,38 +429,181 @@ def handle_photo(message):
             message.photo[-1].file_id
         )
 
+        if file_info.file_size and file_info.file_size > MAX_TOTAL_SIZE:
+            bot.send_message(
+                chat_id,
+                "La fotografia supera el limite permitido."
+            )
+            return
+
         downloaded_file = bot.download_file(
             file_info.file_path
         )
 
-        user_data[chat_id] = {
-            "photo": downloaded_file
-        }
+        number = len(
+            user_data.get(chat_id, {}).get("files", [])
+        ) + 1
 
-        markup = types.InlineKeyboardMarkup()
-
-        markup.add(
-            types.InlineKeyboardButton(
-                "Color",
-                callback_data="print_color"
-            ),
-            types.InlineKeyboardButton(
-                "Blanco y Negro",
-                callback_data="print_bw"
-            )
-        )
-
-        bot.send_message(
+        add_file_to_batch(
             chat_id,
-            "Seleccione el modo de impresion:",
-            reply_markup=markup
+            f"fotografia_{number}.jpg",
+            downloaded_file
         )
 
     except Exception as e:
 
         bot.send_message(
             chat_id,
-            f"Error al recibir la foto: {str(e)}"
+            f"Error al recibir la fotografia: {str(e)}"
+        )
+
+
+# ==============================
+# RECIBIR DOCUMENTOS
+# ==============================
+
+@bot.message_handler(content_types=["document"])
+def handle_document(message):
+
+    chat_id = message.chat.id
+
+    if chat_id not in auth_users:
+        return
+
+    try:
+        document = message.document
+
+        filename = document.file_name or "documento"
+
+        extension = os.path.splitext(filename)[1].lower()
+
+        if extension not in ALLOWED_EXTENSIONS:
+            bot.send_message(
+                chat_id,
+                "Formato no admitido.\n"
+                "Envia PDF, imagenes u otro documento imprimible."
+            )
+            return
+
+        if document.file_size and document.file_size > MAX_TOTAL_SIZE:
+            bot.send_message(
+                chat_id,
+                "El archivo supera el limite de 20 MB."
+            )
+            return
+
+        file_info = bot.get_file(document.file_id)
+
+        downloaded_file = bot.download_file(
+            file_info.file_path
+        )
+
+        add_file_to_batch(
+            chat_id,
+            filename,
+            downloaded_file
+        )
+
+    except Exception as e:
+
+        bot.send_message(
+            chat_id,
+            f"Error al recibir el documento: {str(e)}"
+        )
+
+
+# ==============================
+# PREPARAR ARCHIVOS
+# ==============================
+
+def prepare_attachments(files, is_color):
+
+    attachments = []
+
+    for file in files:
+
+        filename = file["filename"]
+        file_bytes = file["bytes"]
+        extension = file["extension"]
+
+        # Convertimos imagenes compatibles a blanco y negro
+        if (
+            not is_color
+            and extension in CONVERTIBLE_IMAGES
+        ):
+
+            img = Image.open(
+                BytesIO(file_bytes)
+            )
+
+            img = img.convert("L")
+
+            output = BytesIO()
+
+            img.save(
+                output,
+                format="JPEG",
+                quality=95
+            )
+
+            filename = os.path.splitext(filename)[0] + ".jpg"
+            file_bytes = output.getvalue()
+
+        attachments.append((
+            filename,
+            file_bytes,
+            "application/octet-stream"
+        ))
+
+    return attachments
+
+
+# ==============================
+# ENVIO A IMPRESORA BROTHER
+# ==============================
+
+def send_to_printer(chat_id, files, is_color):
+
+    try:
+
+        bot.send_message(
+            chat_id,
+            "Preparando los archivos para la impresora..."
+        )
+
+        attachments = prepare_attachments(
+            files,
+            is_color
+        )
+
+        email_id = send_email_resend(
+            to=PRINTER_EMAIL,
+            subject="Impresion desde Telegram",
+            text=(
+                "Documentos enviados desde el bot de Telegram.\n"
+                f"Cantidad de archivos: {len(attachments)}"
+            ),
+            attachments=attachments
+        )
+
+        bot.send_message(
+            chat_id,
+            "CORREO ACEPTADO POR RESEND\n\n"
+            "Destinatario: impresora Brother\n"
+            f"Archivos enviados: {len(attachments)}\n"
+            f"ID del correo: {email_id}\n\n"
+            "Resend acepto el envio. "
+            "La impresion todavia debe ser confirmada "
+            "por la impresora."
+        )
+
+    except Exception as e:
+
+        bot.send_message(
+            chat_id,
+            "ERROR AL ENVIAR A LA IMPRESORA\n\n"
+            f"Tipo: {type(e).__name__}\n"
+            f"Detalle: {str(e)}"
         )
 
 
@@ -335,7 +611,9 @@ def handle_photo(message):
 # BOTONES INLINE
 # ==============================
 
-@bot.callback_query_handler(func=lambda call: True)
+@bot.callback_query_handler(
+    func=lambda call: True
+)
 def handle_callbacks(call):
 
     chat_id = call.message.chat.id
@@ -347,101 +625,66 @@ def handle_callbacks(call):
 
     if call.data in ["print_color", "print_bw"]:
 
+        data = user_data.get(chat_id)
+
+        if not data or not data.get("files"):
+
+            bot.send_message(
+                chat_id,
+                "No se encontraron archivos. "
+                "Inicia una nueva impresion."
+            )
+
+            show_main_menu(chat_id)
+            return
+
         is_color = call.data == "print_color"
 
-        photo_bytes = user_data.get(
-            chat_id, {}
-        ).get("photo")
+        files = data["files"]
 
-        if photo_bytes:
+        # Liberamos los archivos de la sesion
+        user_data.pop(chat_id, None)
 
-            bot.send_message(
-                chat_id,
-                "Procesando imagen..."
-            )
-
-            send_to_printer(
-                chat_id,
-                photo_bytes,
-                is_color
-            )
-
-            user_data.pop(chat_id, None)
-
-        else:
-
-            bot.send_message(
-                chat_id,
-                "Error: No se encontro la foto. Vuelve a enviarla."
-            )
+        send_to_printer(
+            chat_id,
+            files,
+            is_color
+        )
 
         show_main_menu(chat_id)
 
 
 # ==============================
-# ENVIO A IMPRESORA BROTHER
+# CORREO DE PRUEBA DESACTIVADO
 # ==============================
 
-def send_to_printer(chat_id, photo_bytes, is_color):
-
-    try:
-        bot.send_message(
-            chat_id,
-            "Procesando imagen para la impresora..."
-        )
-
-        img = Image.open(
-            BytesIO(photo_bytes)
-        )
-
-        if not is_color:
-            img = img.convert("L")
-        else:
-            img = img.convert("RGB")
-
-        img = img.resize(
-            (1240, 1754),
-            Image.Resampling.LANCZOS
-        )
-
-        output = BytesIO()
-
-        img.save(
-            output,
-            format="JPEG",
-            quality=95
-        )
-
-        image_data = output.getvalue()
-
-        email_id = send_email_resend(
-            to=PRINTER_EMAIL,
-            subject="Impresion desde Telegram",
-            text="Documento enviado desde el bot de Telegram.",
-            attachment=(
-                "impresion.jpg",
-                image_data,
-                "image/jpeg"
-            )
-        )
-
-        bot.send_message(
-            chat_id,
-            "CORREO ACEPTADO POR RESEND\n\n"
-            "Destinatario: impresora Brother\n"
-            f"ID del correo: {email_id}\n\n"
-            "Resend acepto el envio. "
-            "La impresion todavia debe ser confirmada por la impresora."
-        )
-
-    except Exception as e:
-
-        bot.send_message(
-            chat_id,
-            "ERROR AL ENVIAR A LA IMPRESORA\n\n"
-            f"Tipo: {type(e).__name__}\n"
-            f"Detalle: {str(e)}"
-        )
+# De momento se desactiva el correo de prueba.
+# Para volver a utilizarlo, descomentar esta seccion
+# y agregar nuevamente el boton TEST EMAIL al menu.
+#
+# TEST_EMAIL = "pendoo8x@gmail.com"
+#
+# def send_test_email(chat_id):
+#     try:
+#         email_id = send_email_resend(
+#             to=TEST_EMAIL,
+#             subject="PING",
+#             text="ESTE BOT FUNCIONA!"
+#         )
+#
+#         bot.send_message(
+#             chat_id,
+#             "CORREO ACEPTADO POR RESEND\n\n"
+#             f"Destinatario: {TEST_EMAIL}\n"
+#             f"ID del correo: {email_id}"
+#         )
+#
+#     except Exception as e:
+#         bot.send_message(
+#             chat_id,
+#             "ERROR AL ENVIAR EL CORREO\n\n"
+#             f"Detalle: {str(e)}"
+#         )
 
 
 # ==============================
