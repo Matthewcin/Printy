@@ -3,4 +3,3 @@ Pillow
 Flask
 psycopg2-binary
 resend
-requests
