@@ -132,7 +132,7 @@ def send_to_printer(chat_id, photo_bytes, is_color):
         else:
             img = img.convert("RGB")
         
-        img = img.resize((2480, 3508), Image.Resampling.LANCZOS)
+        img = img.resize((1240, 1754), Image.Resampling.LANCZOS)
         
         output = BytesIO()
         img.save(output, format="JPEG", quality=95)
@@ -146,7 +146,7 @@ def send_to_printer(chat_id, photo_bytes, is_color):
         
         msg.add_attachment(image_data, maintype='image', subtype='jpeg', filename='impresion.jpg')
         
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as smtp:
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=30) as smtp:
             smtp.starttls()
             smtp.login(EMAIL_SENDER, EMAIL_PASSWORD)
             smtp.send_message(msg)
