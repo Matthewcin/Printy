@@ -1,7 +1,10 @@
+```python
 import os
 import threading
 import base64
 import mimetypes
+import uuid
+import time
 from io import BytesIO
 
 import resend
@@ -18,7 +21,6 @@ import psycopg2
 
 TOKEN = os.environ["BOT_TOKEN"]
 PASSWORD = os.environ["BOT_PASSWORD"]
-
 DATABASE_URL = os.environ["DATABASE_URL"]
 
 RESEND_API_KEY = os.environ["RESEND_API_KEY"]
@@ -43,6 +45,206 @@ ALLOWED_EXTENSIONS = {
 CONVERTIBLE_IMAGES = {
     ".jpg", ".jpeg", ".png", ".bmp"
 }
+
+# Bloqueo de instancia:
+# Se renueva cada 45 segundos y vence a los 180 segundos.
+LOCK_ID = 79404057696
+LOCK_RENEW_INTERVAL = 45
+LOCK_DURATION_SECONDS = 180
+
+INSTANCE_ID = str(uuid.uuid4())
+lock_stop_event = threading.Event()
+lock_thread = None
+
+
+# ==============================
+# BASE DE DATOS
+# ==============================
+
+def get_db_connection():
+    return psycopg2.connect(DATABASE_URL)
+
+
+def init_db():
+
+    conn = get_db_connection()
+
+    try:
+        cur = conn.cursor()
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS authorized_users (
+                chat_id BIGINT PRIMARY KEY
+            )
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS bot_instance_lock (
+                lock_id BIGINT PRIMARY KEY,
+                owner_id TEXT NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL
+            )
+        """)
+
+        conn.commit()
+        cur.close()
+
+    finally:
+        conn.close()
+
+
+def get_auth_users():
+
+    conn = get_db_connection()
+
+    try:
+        cur = conn.cursor()
+
+        cur.execute("SELECT chat_id FROM authorized_users")
+
+        rows = cur.fetchall()
+
+        cur.close()
+
+        return set(row[0] for row in rows)
+
+    finally:
+        conn.close()
+
+
+def add_auth_user(chat_id):
+
+    conn = get_db_connection()
+
+    try:
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            INSERT INTO authorized_users (chat_id)
+            VALUES (%s)
+            ON CONFLICT (chat_id) DO NOTHING
+            """,
+            (chat_id,)
+        )
+
+        conn.commit()
+        cur.close()
+
+    finally:
+        conn.close()
+
+
+# ==============================
+# BLOQUEO DE INSTANCIA
+# ==============================
+
+def acquire_bot_lock():
+
+    conn = get_db_connection()
+
+    try:
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            INSERT INTO bot_instance_lock (
+                lock_id,
+                owner_id,
+                expires_at
+            )
+            VALUES (
+                %s,
+                %s,
+                NOW() + (%s * INTERVAL '1 second')
+            )
+            ON CONFLICT (lock_id)
+            DO UPDATE SET
+                owner_id = EXCLUDED.owner_id,
+                expires_at = EXCLUDED.expires_at
+            WHERE bot_instance_lock.expires_at < NOW()
+            RETURNING owner_id
+            """,
+            (
+                LOCK_ID,
+                INSTANCE_ID,
+                LOCK_DURATION_SECONDS
+            )
+        )
+
+        result = cur.fetchone()
+
+        conn.commit()
+        cur.close()
+
+        if result is None:
+            raise RuntimeError(
+                "Otra instancia del bot ya está ejecutándose. "
+                "No se iniciará Telegram."
+            )
+
+        print("Bloqueo de instancia adquirido correctamente.")
+
+    finally:
+        conn.close()
+
+
+def renew_bot_lock():
+
+    conn = get_db_connection()
+
+    try:
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            UPDATE bot_instance_lock
+            SET expires_at = NOW() + (%s * INTERVAL '1 second')
+            WHERE lock_id = %s
+            AND owner_id = %s
+            RETURNING owner_id
+            """,
+            (
+                LOCK_DURATION_SECONDS,
+                LOCK_ID,
+                INSTANCE_ID
+            )
+        )
+
+        result = cur.fetchone()
+
+        conn.commit()
+        cur.close()
+
+        return result is not None
+
+    finally:
+        conn.close()
+
+
+def release_bot_lock():
+
+    conn = get_db_connection()
+
+    try:
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            DELETE FROM bot_instance_lock
+            WHERE lock_id = %s
+            AND owner_id = %s
+            """,
+            (LOCK_ID, INSTANCE_ID)
+        )
+
+        conn.commit()
+        cur.close()
+
+        print("Bloqueo de instancia liberado.")
+
+    finally:
+        conn.close()
 
 
 # ==============================
@@ -96,59 +298,6 @@ def send_email_resend(to, subject, text, attachments=None):
 
 
 # ==============================
-# BASE DE DATOS
-# ==============================
-
-def init_db():
-
-    conn = psycopg2.connect(DATABASE_URL)
-    cur = conn.cursor()
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS authorized_users (
-            chat_id BIGINT PRIMARY KEY
-        )
-    """)
-
-    conn.commit()
-    cur.close()
-    conn.close()
-
-
-def get_auth_users():
-
-    conn = psycopg2.connect(DATABASE_URL)
-    cur = conn.cursor()
-
-    cur.execute("SELECT chat_id FROM authorized_users")
-    rows = cur.fetchall()
-
-    cur.close()
-    conn.close()
-
-    return set(row[0] for row in rows)
-
-
-def add_auth_user(chat_id):
-
-    conn = psycopg2.connect(DATABASE_URL)
-    cur = conn.cursor()
-
-    cur.execute(
-        """
-        INSERT INTO authorized_users (chat_id)
-        VALUES (%s)
-        ON CONFLICT (chat_id) DO NOTHING
-        """,
-        (chat_id,)
-    )
-
-    conn.commit()
-    cur.close()
-    conn.close()
-
-
-# ==============================
 # FLASK
 # ==============================
 
@@ -178,6 +327,41 @@ bot = telebot.TeleBot(TOKEN)
 
 auth_users = set()
 user_data = {}
+
+
+# ==============================
+# RENOVACION DEL BLOQUEO
+# ==============================
+
+def lock_heartbeat():
+
+    while not lock_stop_event.wait(LOCK_RENEW_INTERVAL):
+
+        try:
+
+            if not renew_bot_lock():
+
+                print(
+                    "ERROR: Se perdió el bloqueo de instancia. "
+                    "Deteniendo Telegram."
+                )
+
+                bot.stop_polling()
+                return
+
+            print("Bloqueo de instancia renovado.")
+
+        except Exception as e:
+
+            print(
+                "ERROR renovando el bloqueo: "
+                f"{type(e).__name__}: {e}"
+            )
+
+            # Ante un fallo de conexión no seguimos haciendo polling:
+            # el bloqueo podría vencer y permitir otra instancia.
+            bot.stop_polling()
+            return
 
 
 # ==============================
@@ -265,10 +449,12 @@ def show_guide(chat_id):
         "para la descarga de archivos.\n\n"
 
         "🖨️ MODOS DE IMPRESION\n\n"
+
         "• Color.\n"
         "• Blanco y Negro.\n\n"
 
         "📌 COMO IMPRIMIR\n\n"
+
         "1. Pulsa IMPRIMIR.\n"
         "2. Envia tus archivos uno por uno.\n"
         "3. Comprueba que todos se hayan recibido.\n"
@@ -277,6 +463,7 @@ def show_guide(chat_id):
         "6. Espera la confirmacion del envio.\n\n"
 
         "⚠️ INFORMACION IMPORTANTE\n\n"
+
         "• Los documentos se envian en su formato original.\n"
         "• En Blanco y Negro se convierten las imagenes "
         "compatibles a escala de grises.\n"
@@ -289,10 +476,7 @@ def show_guide(chat_id):
         "Para comenzar, vuelve al menu y pulsa IMPRIMIR."
     )
 
-    bot.send_message(
-        chat_id,
-        guide
-    )
+    bot.send_message(chat_id, guide)
 
 
 # ==============================
@@ -305,11 +489,9 @@ def send_welcome(message):
     chat_id = message.chat.id
 
     if chat_id in auth_users:
-
         show_main_menu(chat_id)
 
     else:
-
         bot.send_message(
             chat_id,
             "Ingrese la contraseña:"
@@ -543,6 +725,17 @@ def handle_photo(message):
     if chat_id not in auth_users:
         return
 
+    data = user_data.get(chat_id)
+
+    if not data or not data.get("collecting"):
+
+        bot.send_message(
+            chat_id,
+            "Primero pulsa IMPRIMIR para iniciar una tanda."
+        )
+
+        return
+
     try:
 
         file_info = bot.get_file(
@@ -554,7 +747,7 @@ def handle_photo(message):
         )
 
         number = len(
-            user_data.get(chat_id, {}).get("files", [])
+            data.get("files", [])
         ) + 1
 
         add_file_to_batch(
@@ -581,6 +774,17 @@ def handle_document(message):
     chat_id = message.chat.id
 
     if chat_id not in auth_users:
+        return
+
+    data = user_data.get(chat_id)
+
+    if not data or not data.get("collecting"):
+
+        bot.send_message(
+            chat_id,
+            "Primero pulsa IMPRIMIR para iniciar una tanda."
+        )
+
         return
 
     try:
@@ -648,8 +852,6 @@ def prepare_attachments(files, is_color):
         filename = file["filename"]
         file_bytes = file["bytes"]
         extension = file["extension"]
-
-        # Convertir imagenes compatibles a blanco y negro
 
         if (
             not is_color
@@ -799,12 +1001,7 @@ def handle_callbacks(call):
 # CORREO DE PRUEBA DESACTIVADO
 # ==============================
 
-# De momento el correo de prueba esta desactivado.
-#
-# Para volver a habilitarlo:
-# 1. Agregar el boton TEST EMAIL al menu principal.
-# 2. Agregar TEST EMAIL al controlador handle_menu.
-# 3. Descomentar la funcion send_test_email.
+# El correo de prueba permanece desactivado.
 #
 # TEST_EMAIL = "pendoo8x@gmail.com"
 #
@@ -842,8 +1039,21 @@ if __name__ == "__main__":
 
     init_db()
 
+    # Intentar adquirir el bloqueo antes de iniciar Telegram.
+    acquire_bot_lock()
+
+    # Cargar usuarios autorizados.
     auth_users = get_auth_users()
 
+    # Iniciar la renovacion del bloqueo.
+    lock_thread = threading.Thread(
+        target=lock_heartbeat,
+        daemon=True
+    )
+
+    lock_thread.start()
+
+    # Iniciar servidor web para Render.
     server_thread = threading.Thread(
         target=run_server,
         daemon=True
@@ -851,8 +1061,32 @@ if __name__ == "__main__":
 
     server_thread.start()
 
-    bot.infinity_polling(
-        skip_pending=True,
-        timeout=30,
-        long_polling_timeout=30
-    )
+    print("Bot iniciado correctamente.")
+
+    try:
+
+        bot.infinity_polling(
+            skip_pending=True,
+            timeout=30,
+            long_polling_timeout=30
+        )
+
+    except KeyboardInterrupt:
+
+        print("Cierre solicitado.")
+
+    finally:
+
+        lock_stop_event.set()
+
+        if lock_thread:
+            lock_thread.join(timeout=5)
+
+        try:
+            release_bot_lock()
+        except Exception as e:
+            print(
+                "No se pudo liberar el bloqueo: "
+                f"{type(e).__name__}: {e}"
+            )
+```
