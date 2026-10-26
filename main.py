@@ -11,7 +11,7 @@ import psycopg2
 
 TOKEN = "8837741358:AAFckJCvuACBT4-KIyNp7WqxQ69YEQEYSXY"
 PASSWORD = "160620"
-PRINTER_EMAIL = "yellower@print.brother.com"
+PRINTER_EMAIL = "79404057696@print.brother.com"
 EMAIL_SENDER = "printythebot@outlook.com"
 EMAIL_PASSWORD = "lybjezesstkmwmzb"
 SMTP_SERVER = "smtp-mail.outlook.com"
