@@ -1,3 +1,4 @@
 pyTelegramBotAPI
 Pillow
 Flask
+psycopg2-binary
