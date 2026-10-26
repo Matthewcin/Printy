@@ -5,6 +5,7 @@ import base64
 import mimetypes
 import uuid
 import time
+from telebot.apihelper import ApiTelegramException
 from io import BytesIO
 
 import resend
@@ -1086,18 +1087,29 @@ if __name__ == "__main__":
 
     server_thread.start()
 
-    print("Bot iniciado correctamente.")
+    print("Bot iniciado correctamente. Conectando a Telegram...")
 
     try:
-
-        bot.infinity_polling(
-            skip_pending=True,
-            timeout=30,
-            long_polling_timeout=30
-        )
+        while True:
+            try:
+                bot.infinity_polling(
+                    skip_pending=True,
+                    timeout=30,
+                    long_polling_timeout=30
+                )
+                break  # Sale del bucle si infinity_polling termina de forma natural
+            except ApiTelegramException as e:
+                if e.error_code == 409:
+                    print("Conflicto 409: Instancia vieja aún activa en Render. Reintentando en 10 segundos...")
+                    time.sleep(10)
+                else:
+                    print(f"Error de Telegram: {e}. Reintentando...")
+                    time.sleep(5)
+            except Exception as e:
+                print(f"Error inesperado: {e}. Reintentando en 5 segundos...")
+                time.sleep(5)
 
     except KeyboardInterrupt:
-
         print("Cierre solicitado.")
 
     finally:
