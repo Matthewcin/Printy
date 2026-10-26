@@ -4,6 +4,10 @@ import smtplib
 from email.message import EmailMessage
 from io import BytesIO
 
+import socket
+import ssl
+import smtplib
+
 import telebot
 from telebot import types
 from PIL import Image
@@ -188,6 +192,8 @@ def handle_menu(message):
 # ==============================
 
 def send_test_email(chat_id):
+    etapa = "Preparando correo"
+
     try:
         msg = EmailMessage()
 
@@ -197,17 +203,29 @@ def send_test_email(chat_id):
 
         msg.set_content("ESTE BOT FUNCIONA!")
 
+        etapa = "Conectando con Outlook SMTP"
+
         with smtplib.SMTP(
             SMTP_SERVER,
             SMTP_PORT,
             timeout=30
         ) as smtp:
 
-            smtp.ehlo()
-            smtp.starttls()
+            etapa = "Verificando servidor SMTP"
             smtp.ehlo()
 
-            smtp.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            etapa = "Iniciando conexion TLS"
+            smtp.starttls(context=ssl.create_default_context())
+            smtp.ehlo()
+
+            etapa = "Autenticando cuenta Outlook"
+
+            smtp.login(
+                EMAIL_SENDER,
+                EMAIL_PASSWORD
+            )
+
+            etapa = "Enviando correo a Gmail"
 
             smtp.send_message(
                 msg,
@@ -217,15 +235,75 @@ def send_test_email(chat_id):
 
         bot.send_message(
             chat_id,
-            "¡PING enviado correctamente a pendoo8x@gmail.com!"
+            "✅ CORREO ENVIADO\n\n"
+            "Destinatario: " + TEST_EMAIL + "\n"
+            "Asunto: PING\n"
+            "Mensaje: ESTE BOT FUNCIONA!\n\n"
+            "Outlook aceptó el envío."
+        )
+
+    except smtplib.SMTPAuthenticationError as e:
+        bot.send_message(
+            chat_id,
+            "❌ ERROR DE AUTENTICACION OUTLOOK\n\n"
+            "Codigo SMTP: " + str(e.smtp_code) + "\n"
+            "Respuesta: " + str(e.smtp_error) + "\n\n"
+            "Revisa:\n"
+            "• Correo y contraseña de aplicacion.\n"
+            "• Que la contraseña no tenga espacios adicionales.\n"
+            "• Que la verificacion en dos pasos siga activa.\n"
+            "• Que SMTP AUTH este habilitado."
+        )
+
+    except smtplib.SMTPRecipientsRefused as e:
+        bot.send_message(
+            chat_id,
+            "❌ DESTINATARIO RECHAZADO\n\n"
+            "Respuesta SMTP:\n" + str(e.recipients)
+        )
+
+    except smtplib.SMTPResponseException as e:
+        bot.send_message(
+            chat_id,
+            "❌ ERROR DEL SERVIDOR SMTP\n\n"
+            "Codigo: " + str(e.smtp_code) + "\n"
+            "Respuesta: " + str(e.smtp_error)
+        )
+
+    except smtplib.SMTPConnectError as e:
+        bot.send_message(
+            chat_id,
+            "❌ ERROR DE CONEXION SMTP\n\n" + str(e)
+        )
+
+    except smtplib.SMTPServerDisconnected as e:
+        bot.send_message(
+            chat_id,
+            "❌ OUTLOOK DESCONECTO LA SESION\n\n" + str(e)
+        )
+
+    except (socket.gaierror, TimeoutError, OSError) as e:
+        bot.send_message(
+            chat_id,
+            "❌ ERROR DE RED O CONEXION\n\n"
+            "Tipo: " + type(e).__name__ + "\n"
+            "Detalle: " + str(e)
+        )
+
+    except ssl.SSLError as e:
+        bot.send_message(
+            chat_id,
+            "❌ ERROR DE SEGURIDAD TLS\n\n" + str(e)
         )
 
     except Exception as e:
         bot.send_message(
             chat_id,
-            f"Error al enviar PING: {str(e)}"
+            "❌ ERROR INESPERADO\n\n"
+            "Etapa: " + etapa + "\n"
+            "Tipo: " + type(e).__name__ + "\n"
+            "Detalle: " + str(e)
         )
-
 
 # ==============================
 # RECIBIR FOTOGRAFIAS
