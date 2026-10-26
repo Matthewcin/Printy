@@ -1,4 +1,3 @@
-
 import os
 import threading
 import base64
@@ -1097,7 +1096,7 @@ if __name__ == "__main__":
                     timeout=30,
                     long_polling_timeout=30
                 )
-                break  # Sale del bucle si infinity_polling termina de forma natural
+                break 
             except ApiTelegramException as e:
                 if e.error_code == 409:
                     print("Conflicto 409: Instancia vieja aún activa en Render. Reintentando en 10 segundos...")
