@@ -26,7 +26,7 @@ EMAIL_SENDER = os.environ["EMAIL_FROM"]
 
 resend.api_key = RESEND_API_KEY
 
-PRINTER_EMAIL = "79404057696@print.brother.com"
+PRINTER_EMAIL = "yellower@print.brother.com"
 
 MAX_FILES = 10
 MAX_TOTAL_SIZE = 20 * 1024 * 1024  # 20 MB
