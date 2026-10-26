@@ -284,10 +284,12 @@ def send_email_resend(
 
         if idempotency_key:
 
-            response = resend.Emails.send(
-                params,
-                idempotency_key=idempotency_key
-            )
+           response = resend.Emails.send(
+    params,
+    {
+        "idempotency_key": idempotency_key
+    }
+)
 
         else:
 
