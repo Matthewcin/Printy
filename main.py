@@ -15,19 +15,19 @@ import psycopg2
 # CONFIGURACION
 # ==============================
 
-TOKEN = os.environ["8837741358:AAFckJCvuACBT4-KIyNp7WqxQ69YEQEYSXY"]
-PASSWORD = os.environ["160620"]
+TOKEN = os.environ["BOT_TOKEN"]
+PASSWORD = os.environ["BOT_PASSWORD"]
 
 PRINTER_EMAIL = "79404057696@print.brother.com"
 TEST_EMAIL = "pendoo8x@gmail.com"
 
-EMAIL_SENDER = os.environ["printythebot@outlook.com"]
-EMAIL_PASSWORD = os.environ["lybjezesstkmwmzb"]
+EMAIL_SENDER = os.environ["EMAIL_SENDER"]
+EMAIL_PASSWORD = os.environ["EMAIL_PASSWORD"]
 
 SMTP_SERVER = "smtp-mail.outlook.com"
 SMTP_PORT = 587
 
-DATABASE_URL = os.environ["postgresql://neondb_owner:npg_VvNCRHKr2L4I@ep-quiet-sea-b40g1xzz-pooler.c-6.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"]
+DATABASE_URL = os.environ["DATABASE_URL"]
 
 
 # ==============================
