@@ -1,4 +1,3 @@
-
 import os
 import threading
 import base64
@@ -42,8 +41,6 @@ ALLOWED_EXTENSIONS = {
     ".ppt", ".pptx"
 }
 
-# Estas imágenes se convierten automáticamente
-# a escala de grises antes de enviarse.
 CONVERTIBLE_IMAGES = {
     ".jpg", ".jpeg", ".png", ".bmp"
 }
@@ -68,7 +65,6 @@ lock_thread = None
 # ==============================
 
 def get_db_connection():
-
     return psycopg2.connect(DATABASE_URL)
 
 
@@ -77,7 +73,6 @@ def init_db():
     conn = get_db_connection()
 
     try:
-
         cur = conn.cursor()
 
         cur.execute("""
@@ -98,7 +93,6 @@ def init_db():
         cur.close()
 
     finally:
-
         conn.close()
 
 
@@ -107,7 +101,6 @@ def get_auth_users():
     conn = get_db_connection()
 
     try:
-
         cur = conn.cursor()
 
         cur.execute("SELECT chat_id FROM authorized_users")
@@ -119,7 +112,6 @@ def get_auth_users():
         return set(row[0] for row in rows)
 
     finally:
-
         conn.close()
 
 
@@ -128,7 +120,6 @@ def add_auth_user(chat_id):
     conn = get_db_connection()
 
     try:
-
         cur = conn.cursor()
 
         cur.execute(
@@ -144,7 +135,6 @@ def add_auth_user(chat_id):
         cur.close()
 
     finally:
-
         conn.close()
 
 
@@ -158,7 +148,6 @@ def acquire_bot_lock():
     conn = get_db_connection()
 
     try:
-
         cur = conn.cursor()
 
         cur.execute(
@@ -193,7 +182,6 @@ def acquire_bot_lock():
         cur.close()
 
         if result is None:
-
             raise RuntimeError(
                 "Otra instancia del bot ya está ejecutándose. "
                 "No se iniciará Telegram."
@@ -202,7 +190,6 @@ def acquire_bot_lock():
         print("Bloqueo de instancia adquirido correctamente.")
 
     finally:
-
         conn.close()
 
 
@@ -211,7 +198,6 @@ def renew_bot_lock():
     conn = get_db_connection()
 
     try:
-
         cur = conn.cursor()
 
         cur.execute(
@@ -237,7 +223,6 @@ def renew_bot_lock():
         return result is not None
 
     finally:
-
         conn.close()
 
 
@@ -246,7 +231,6 @@ def release_bot_lock():
     conn = get_db_connection()
 
     try:
-
         cur = conn.cursor()
 
         cur.execute(
@@ -264,13 +248,11 @@ def release_bot_lock():
         print("Bloqueo de instancia liberado.")
 
     finally:
-
         conn.close()
 
 
 # ==============================
 # RESEND
-# Envio mediante API HTTP
 # ==============================
 
 def send_email_resend(
@@ -314,7 +296,6 @@ def send_email_resend(
     }
 
     if idempotency_key:
-
         headers["Idempotency-Key"] = idempotency_key
 
     try:
@@ -327,7 +308,6 @@ def send_email_resend(
         )
 
         if not response.ok:
-
             raise Exception(
                 f"Resend HTTP {response.status_code}: "
                 f"{response.text}"
@@ -338,7 +318,6 @@ def send_email_resend(
         email_id = result.get("id")
 
         if not email_id:
-
             raise Exception(
                 f"Resend no devolvio un ID: {result}"
             )
@@ -361,7 +340,6 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-
     return "Bot de impresion activo"
 
 
@@ -389,6 +367,7 @@ callback_lock = threading.Lock()
 
 # ==============================
 # RENOVACION DEL BLOQUEO
+# NO MODIFICADO
 # ==============================
 
 def lock_heartbeat():
@@ -421,47 +400,171 @@ def lock_heartbeat():
 
 
 # ==============================
+# TECLADOS INLINE
+# ==============================
+
+def main_menu_keyboard():
+
+    markup = types.InlineKeyboardMarkup()
+
+    markup.row(
+        types.InlineKeyboardButton(
+            "🖨️ IMPRIMIR",
+            callback_data="main_print"
+        )
+    )
+
+    markup.row(
+        types.InlineKeyboardButton(
+            "📖 GUIA",
+            callback_data="main_guide"
+        )
+    )
+
+    return markup
+
+
+def cancel_keyboard():
+
+    markup = types.InlineKeyboardMarkup()
+
+    markup.add(
+        types.InlineKeyboardButton(
+            "❌ CANCELAR",
+            callback_data="cancel"
+        )
+    )
+
+    return markup
+
+
+def upload_keyboard():
+
+    markup = types.InlineKeyboardMarkup()
+
+    markup.row(
+        types.InlineKeyboardButton(
+            "🎨 ELEGIR COLOR",
+            callback_data="choose_mode"
+        )
+    )
+
+    markup.row(
+        types.InlineKeyboardButton(
+            "❌ CANCELAR",
+            callback_data="cancel"
+        )
+    )
+
+    return markup
+
+
+def mode_keyboard():
+
+    markup = types.InlineKeyboardMarkup()
+
+    markup.row(
+        types.InlineKeyboardButton(
+            "🌈 A COLOR",
+            callback_data="mode_color"
+        ),
+        types.InlineKeyboardButton(
+            "⚫ BLANCO Y NEGRO",
+            callback_data="mode_bw"
+        )
+    )
+
+    markup.row(
+        types.InlineKeyboardButton(
+            "⬅️ VOLVER",
+            callback_data="back_upload"
+        ),
+        types.InlineKeyboardButton(
+            "❌ CANCELAR",
+            callback_data="cancel"
+        )
+    )
+
+    return markup
+
+
+def confirm_keyboard():
+
+    markup = types.InlineKeyboardMarkup()
+
+    markup.row(
+        types.InlineKeyboardButton(
+            "✅ CONFIRMAR IMPRESION",
+            callback_data="confirm_print"
+        )
+    )
+
+    markup.row(
+        types.InlineKeyboardButton(
+            "⬅️ VOLVER",
+            callback_data="back_mode"
+        ),
+        types.InlineKeyboardButton(
+            "❌ CANCELAR",
+            callback_data="cancel"
+        )
+    )
+
+    return markup
+
+
+def back_main_keyboard():
+
+    markup = types.InlineKeyboardMarkup()
+
+    markup.add(
+        types.InlineKeyboardButton(
+            "⬅️ VOLVER AL MENU",
+            callback_data="main_menu"
+        )
+    )
+
+    return markup
+
+
+# ==============================
 # MENU PRINCIPAL
 # ==============================
 
 def show_main_menu(chat_id):
 
-    markup = types.ReplyKeyboardMarkup(
-        resize_keyboard=True
-    )
-
-    markup.row(
-        types.KeyboardButton("IMPRIMIR"),
-        types.KeyboardButton("GUIA")
-    )
-
     bot.send_message(
         chat_id,
-        "Menu principal:",
-        reply_markup=markup
+        "🏠 MENU PRINCIPAL\n\n"
+        "¿Que deseas hacer?",
+        reply_markup=main_menu_keyboard()
     )
 
 
 # ==============================
-# MENU DE IMPRESION
+# INICIAR IMPRESION
 # ==============================
 
-def show_print_menu(chat_id):
+def start_printing(chat_id):
 
-    markup = types.ReplyKeyboardMarkup(
-        resize_keyboard=True
-    )
-
-    markup.row(
-        types.KeyboardButton("CONFIRMAR IMPRESION"),
-        types.KeyboardButton("CANCELAR")
-    )
+    user_data[chat_id] = {
+        "files": [],
+        "total_size": 0,
+        "collecting": True,
+        "processing": False,
+        "mode": None,
+        "batch_id": str(uuid.uuid4())
+    }
 
     bot.send_message(
         chat_id,
-        "Cuando hayas enviado todos los archivos, "
-        "pulsa CONFIRMAR IMPRESION.",
-        reply_markup=markup
+        "📥 ENVIAR ARCHIVOS\n\n"
+        "Puedes enviar hasta 10 archivos "
+        "con un maximo de 20 MB en total.\n\n"
+        "Envia tus documentos o fotografias "
+        "uno por uno.\n\n"
+        "Cuando termines, pulsa ELEGIR COLOR.",
+        reply_markup=cancel_keyboard()
     )
 
 
@@ -492,47 +595,44 @@ def show_guide(chat_id):
 
         "📦 LIMITES POR ENVIO\n\n"
         "• Maximo 10 archivos por tanda.\n"
-        "• Maximo 20 MB en total por correo.\n"
-        "• Puedes enviar los archivos uno por uno.\n"
-        "• Tambien puedes enviar imagenes como documentos "
-        "para conservar su calidad original.\n\n"
+        "• Maximo 20 MB en total por correo.\n\n"
 
-        "📄 TAMAÑOS DE ARCHIVO\n\n"
-        "• El limite total de la tanda es de 20 MB.\n"
-        "• El tamaño de cada archivo debe permitir "
-        "respetar ese limite.\n"
-        "• Telegram tambien aplica sus propios limites "
-        "para la descarga de archivos.\n\n"
+        "🖨️ MODOS DE IMPRESION\n\n"
 
-        "🖨️ MODO DE IMPRESION\n\n"
+        "🌈 A COLOR:\n"
+        "Las imagenes se envian sin convertir.\n\n"
 
-        "• Las imagenes compatibles se convierten "
-        "automaticamente a escala de grises.\n"
-        "• Los documentos se envian sin modificar.\n\n"
+        "⚫ BLANCO Y NEGRO:\n"
+        "Las imagenes compatibles se convierten "
+        "a escala de grises usando Pillow.\n\n"
+
+        "Los PDF y documentos de Office se envian "
+        "sin modificar en ambos modos.\n\n"
 
         "📌 COMO IMPRIMIR\n\n"
 
         "1. Pulsa IMPRIMIR.\n"
         "2. Envia tus archivos uno por uno.\n"
-        "3. Comprueba que todos se hayan recibido.\n"
-        "4. Pulsa CONFIRMAR IMPRESION.\n"
-        "5. Espera la confirmacion del envio.\n\n"
+        "3. Pulsa ELEGIR COLOR.\n"
+        "4. Selecciona A COLOR o BLANCO Y NEGRO.\n"
+        "5. Confirma la impresion.\n\n"
 
         "⚠️ INFORMACION IMPORTANTE\n\n"
 
-        "• JPG, JPEG, PNG y BMP se convierten "
-        "a escala de grises.\n"
-        "• Los PDF y documentos no se modifican.\n"
+        "• JPG, JPEG, PNG y BMP se pueden convertir.\n"
         "• GIF y TIFF se envian en su formato original.\n"
+        "• PDF y documentos no se modifican.\n"
         "• El tamaño de papel y otras opciones dependen "
-        "del documento y de la configuracion de la Brother.\n"
+        "de la configuracion de la Brother.\n"
         "• La aceptacion del correo no garantiza que "
-        "la impresora haya terminado de imprimir.\n\n"
-
-        "Para comenzar, vuelve al menu y pulsa IMPRIMIR."
+        "la impresora haya terminado de imprimir."
     )
 
-    bot.send_message(chat_id, guide)
+    bot.send_message(
+        chat_id,
+        guide,
+        reply_markup=back_main_keyboard()
+    )
 
 
 # ==============================
@@ -545,11 +645,9 @@ def send_welcome(message):
     chat_id = message.chat.id
 
     if chat_id in auth_users:
-
         show_main_menu(chat_id)
 
     else:
-
         bot.send_message(
             chat_id,
             "Ingrese la contraseña:"
@@ -588,54 +686,180 @@ def check_auth(message):
 
 
 # ==============================
-# MENU DE OPCIONES
+# CALLBACKS DE TELEGRAM
 # ==============================
 
-@bot.message_handler(
-    func=lambda message:
-        message.content_type == "text"
-        and message.text in [
-            "IMPRIMIR",
-            "GUIA",
-            "CONFIRMAR IMPRESION",
-            "CANCELAR"
-        ]
-)
-def handle_menu(message):
+@bot.callback_query_handler(func=lambda call: True)
+def handle_callbacks(call):
 
-    chat_id = message.chat.id
+    chat_id = call.message.chat.id
 
     if chat_id not in auth_users:
-        return
 
-    if message.text == "IMPRIMIR":
-
-        user_data[chat_id] = {
-            "files": [],
-            "total_size": 0,
-            "collecting": True,
-            "processing": False,
-            "batch_id": str(uuid.uuid4())
-        }
-
-        bot.send_message(
-            chat_id,
-            "📥 ENVIAR ARCHIVOS\n\n"
-            "Puedes enviar hasta 10 archivos "
-            "con un maximo de 20 MB en total.\n\n"
-            "Las imagenes compatibles se convertiran "
-            "automaticamente a escala de grises.\n\n"
-            "Envia tus documentos o fotografias "
-            "uno por uno."
+        bot.answer_callback_query(
+            call.id,
+            "No tienes autorización."
         )
 
-        show_print_menu(chat_id)
+        return
 
-    elif message.text == "GUIA":
+    action = call.data
+
+    bot.answer_callback_query(call.id)
+
+    # --------------------------
+    # MENU PRINCIPAL
+    # --------------------------
+
+    if action == "main_menu":
+
+        user_data.pop(chat_id, None)
+        show_main_menu(chat_id)
+
+    elif action == "main_print":
+
+        start_printing(chat_id)
+
+    elif action == "main_guide":
 
         show_guide(chat_id)
 
-    elif message.text == "CONFIRMAR IMPRESION":
+    # --------------------------
+    # CANCELAR
+    # --------------------------
+
+    elif action == "cancel":
+
+        user_data.pop(chat_id, None)
+
+        bot.send_message(
+            chat_id,
+            "❌ IMPRESION CANCELADA\n\n"
+            "Se descartaron los archivos pendientes.",
+            reply_markup=main_menu_keyboard()
+        )
+
+    # --------------------------
+    # ELEGIR MODO
+    # --------------------------
+
+    elif action == "choose_mode":
+
+        data = user_data.get(chat_id)
+
+        if not data or not data.get("files"):
+
+            bot.send_message(
+                chat_id,
+                "Todavia no has enviado ningun archivo.",
+                reply_markup=cancel_keyboard()
+            )
+
+            return
+
+        if not data.get("collecting"):
+
+            bot.send_message(
+                chat_id,
+                "Esta tanda ya no acepta archivos."
+            )
+
+            return
+
+        bot.send_message(
+            chat_id,
+            "🖨️ SELECCIONA EL MODO DE IMPRESION\n\n"
+            "🌈 A COLOR: conserva las imagenes originales.\n\n"
+            "⚫ BLANCO Y NEGRO: convierte las imagenes "
+            "compatibles a escala de grises.",
+            reply_markup=mode_keyboard()
+        )
+
+    # --------------------------
+    # VOLVER A CARGAR ARCHIVOS
+    # --------------------------
+
+    elif action == "back_upload":
+
+        data = user_data.get(chat_id)
+
+        if not data:
+            show_main_menu(chat_id)
+            return
+
+        data["mode"] = None
+        data["collecting"] = True
+
+        bot.send_message(
+            chat_id,
+            "📥 Puedes seguir enviando archivos.\n\n"
+            "Cuando termines, pulsa ELEGIR COLOR.",
+            reply_markup=upload_keyboard()
+        )
+
+    # --------------------------
+    # MODO COLOR
+    # --------------------------
+
+    elif action == "mode_color":
+
+        data = user_data.get(chat_id)
+
+        if not data or not data.get("files"):
+            bot.send_message(
+                chat_id,
+                "No hay archivos en esta tanda."
+            )
+            return
+
+        data["mode"] = "color"
+        data["collecting"] = False
+
+        show_confirmation(chat_id, data)
+
+    # --------------------------
+    # MODO BLANCO Y NEGRO
+    # --------------------------
+
+    elif action == "mode_bw":
+
+        data = user_data.get(chat_id)
+
+        if not data or not data.get("files"):
+            bot.send_message(
+                chat_id,
+                "No hay archivos en esta tanda."
+            )
+            return
+
+        data["mode"] = "bw"
+        data["collecting"] = False
+
+        show_confirmation(chat_id, data)
+
+    # --------------------------
+    # VOLVER A ELEGIR MODO
+    # --------------------------
+
+    elif action == "back_mode":
+
+        data = user_data.get(chat_id)
+
+        if not data:
+            show_main_menu(chat_id)
+            return
+
+        bot.send_message(
+            chat_id,
+            "Selecciona nuevamente el modo de impresion:",
+            reply_markup=mode_keyboard()
+        )
+
+    # --------------------------
+    # CONFIRMAR IMPRESION
+    # --------------------------
+
+    elif action == "confirm_print":
 
         with callback_lock:
 
@@ -645,16 +869,7 @@ def handle_menu(message):
 
                 bot.send_message(
                     chat_id,
-                    "Todavia no has enviado ningun archivo."
-                )
-
-                return
-
-            if not data.get("collecting"):
-
-                bot.send_message(
-                    chat_id,
-                    "Esta tanda ya fue confirmada."
+                    "No hay archivos para imprimir."
                 )
 
                 return
@@ -668,34 +883,66 @@ def handle_menu(message):
 
                 return
 
-            data["collecting"] = False
+            if data.get("collecting"):
+
+                bot.send_message(
+                    chat_id,
+                    "Primero debes seleccionar el modo."
+                )
+
+                return
+
+            if data.get("mode") not in ("color", "bw"):
+
+                bot.send_message(
+                    chat_id,
+                    "Selecciona un modo de impresion."
+                )
+
+                return
+
             data["processing"] = True
 
             files = data["files"]
             batch_id = data["batch_id"]
+            mode = data["mode"]
 
-            # Retirar la tanda para evitar
-            # que se envie dos veces.
             user_data.pop(chat_id, None)
 
         send_to_printer(
             chat_id,
             files,
-            batch_id
+            batch_id,
+            mode
         )
 
         show_main_menu(chat_id)
 
-    elif message.text == "CANCELAR":
 
-        user_data.pop(chat_id, None)
+# ==============================
+# CONFIRMACION
+# ==============================
 
-        bot.send_message(
-            chat_id,
-            "Impresion cancelada."
-        )
+def show_confirmation(chat_id, data):
 
-        show_main_menu(chat_id)
+    mode = data["mode"]
+
+    if mode == "color":
+        mode_text = "🌈 A COLOR"
+    else:
+        mode_text = "⚫ BLANCO Y NEGRO"
+
+    total_mb = data["total_size"] / (1024 * 1024)
+
+    bot.send_message(
+        chat_id,
+        "📋 RESUMEN DE IMPRESION\n\n"
+        f"Archivos: {len(data['files'])}/{MAX_FILES}\n"
+        f"Tamaño total: {total_mb:.2f} MB\n"
+        f"Modo: {mode_text}\n\n"
+        "¿Deseas enviar estos archivos a la impresora?",
+        reply_markup=confirm_keyboard()
+    )
 
 
 # ==============================
@@ -762,7 +1009,8 @@ def add_file_to_batch(chat_id, filename, file_bytes):
         "✅ ARCHIVO RECIBIDO\n\n"
         f"Nombre: {filename}\n"
         f"Archivos: {len(data['files'])}/{MAX_FILES}\n"
-        f"Tamano total: {total_mb:.2f} MB / 20 MB"
+        f"Tamano total: {total_mb:.2f} MB / 20 MB",
+        reply_markup=upload_keyboard()
     )
 
     if len(data["files"]) >= MAX_FILES:
@@ -770,7 +1018,8 @@ def add_file_to_batch(chat_id, filename, file_bytes):
         bot.send_message(
             chat_id,
             "Has alcanzado los 10 archivos. "
-            "Puedes confirmar la impresion."
+            "Ya puedes elegir el modo de impresion.",
+            reply_markup=upload_keyboard()
         )
 
 
@@ -807,9 +1056,7 @@ def handle_photo(message):
             file_info.file_path
         )
 
-        number = len(
-            data.get("files", [])
-        ) + 1
+        number = len(data.get("files", [])) + 1
 
         add_file_to_batch(
             chat_id,
@@ -904,7 +1151,7 @@ def handle_document(message):
 # PREPARAR ARCHIVOS
 # ==============================
 
-def prepare_attachments(files):
+def prepare_attachments(files, mode):
 
     attachments = []
 
@@ -914,9 +1161,10 @@ def prepare_attachments(files):
         file_bytes = file["bytes"]
         extension = file["extension"]
 
-        # Convertir imágenes compatibles
-        # a escala de grises.
-        if extension in CONVERTIBLE_IMAGES:
+        # BLANCO Y NEGRO:
+        # Convertir imágenes compatibles con Pillow.
+
+        if mode == "bw" and extension in CONVERTIBLE_IMAGES:
 
             with Image.open(BytesIO(file_bytes)) as original:
 
@@ -939,7 +1187,6 @@ def prepare_attachments(files):
         mime_type, _ = mimetypes.guess_type(filename)
 
         if not mime_type:
-
             mime_type = "application/octet-stream"
 
         attachments.append((
@@ -955,29 +1202,39 @@ def prepare_attachments(files):
 # ENVIO A IMPRESORA BROTHER
 # ==============================
 
-def send_to_printer(chat_id, files, batch_id):
+def send_to_printer(chat_id, files, batch_id, mode):
 
     try:
 
+        if mode == "color":
+
+            mode_text = "A COLOR"
+
+        else:
+
+            mode_text = "BLANCO Y NEGRO"
+
         bot.send_message(
             chat_id,
+            "⏳ PREPARANDO IMPRESION\n\n"
+            f"Modo seleccionado: {mode_text}\n"
             "Preparando los archivos para la impresora..."
         )
 
-        attachments = prepare_attachments(files)
+        attachments = prepare_attachments(
+            files,
+            mode
+        )
 
         email_id = send_email_resend(
             to=PRINTER_EMAIL,
 
-            # Asunto sin información visible.
             subject=" ",
 
-            # Cuerpo sin texto visible.
             html="<!-- -->",
 
             attachments=attachments,
 
-            # Clave única para esta tanda.
             idempotency_key=f"telegram-print-{batch_id}"
         )
 
@@ -985,6 +1242,7 @@ def send_to_printer(chat_id, files, batch_id):
             chat_id,
             "✅ CORREO ACEPTADO POR RESEND\n\n"
             "Destinatario: impresora Brother\n"
+            f"Modo: {mode_text}\n"
             f"Archivos enviados: {len(attachments)}\n"
             f"ID del correo: {email_id}\n\n"
             "Resend acepto el envio. "
