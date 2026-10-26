@@ -1,3 +1,4 @@
+
 import os
 import threading
 import base64
@@ -12,7 +13,7 @@ from io import BytesIO
 
 import telebot
 from telebot import types
-from PIL import Image
+from PIL import Image, ImageEnhance
 from flask import Flask
 import psycopg2
 
@@ -31,7 +32,7 @@ EMAIL_SENDER = os.environ["EMAIL_FROM"]
 PRINTER_EMAIL = "yellower@print.brother.com"
 
 MAX_FILES = 10
-MAX_TOTAL_SIZE = 20 * 1024 * 1024  # 20 MB
+MAX_TOTAL_SIZE = 20 * 1024 * 1024
 
 ALLOWED_EXTENSIONS = {
     ".pdf",
@@ -45,6 +46,10 @@ ALLOWED_EXTENSIONS = {
 CONVERTIBLE_IMAGES = {
     ".jpg", ".jpeg", ".png", ".bmp"
 }
+
+CONTRAST_MIN = 0.50
+CONTRAST_MAX = 2.50
+CONTRAST_STEP = 0.25
 
 
 # ==============================
@@ -62,10 +67,10 @@ lock_thread = None
 
 
 # ==============================
-# CONVERSOR B&N PDF
+# PROCESAMIENTO DE PDF
 # ==============================
 
-def convert_pdf_to_bw(file_bytes, dpi=200):
+def process_pdf(file_bytes, mode="color", contrast=1.0, dpi=200):
 
     source_pdf = fitz.open(
         stream=file_bytes,
@@ -78,13 +83,38 @@ def convert_pdf_to_bw(file_bytes, dpi=200):
 
         for page in source_pdf:
 
+            colorspace = (
+                fitz.csGRAY
+                if mode == "bw"
+                else fitz.csRGB
+            )
+
             pix = page.get_pixmap(
                 dpi=dpi,
-                colorspace=fitz.csGRAY,
+                colorspace=colorspace,
                 alpha=False
             )
 
-            image_bytes = pix.tobytes("png")
+            image_mode = "L" if mode == "bw" else "RGB"
+
+            img = Image.frombytes(
+                image_mode,
+                [pix.width, pix.height],
+                pix.samples
+            )
+
+            if contrast != 1.0:
+
+                img = ImageEnhance.Contrast(img).enhance(
+                    contrast
+                )
+
+            image_output = BytesIO()
+
+            img.save(
+                image_output,
+                format="PNG"
+            )
 
             new_page = output_pdf.new_page(
                 width=page.rect.width,
@@ -93,7 +123,7 @@ def convert_pdf_to_bw(file_bytes, dpi=200):
 
             new_page.insert_image(
                 new_page.rect,
-                stream=image_bytes
+                stream=image_output.getvalue()
             )
 
         output = BytesIO()
@@ -112,25 +142,19 @@ def convert_pdf_to_bw(file_bytes, dpi=200):
         output_pdf.close()
 
 
-# ==============================
-# GENERAR PREVIEW PDF
-# ==============================
+def generate_pdf_preview(file_bytes, mode="color", contrast=1.0):
 
-def generate_pdf_preview(file_bytes, mode="color", dpi=120):
+    # Se procesa con los mismos ajustes que el archivo final.
 
-    pdf_bytes = file_bytes
-
-    # En blanco y negro, usar exactamente
-    # el mismo PDF convertido que se enviara a imprimir.
-
-    if mode == "bw":
-
-        pdf_bytes = convert_pdf_to_bw(
-            file_bytes
-        )
+    processed = process_pdf(
+        file_bytes,
+        mode=mode,
+        contrast=contrast,
+        dpi=200
+    )
 
     pdf = fitz.open(
-        stream=pdf_bytes,
+        stream=processed,
         filetype="pdf"
     )
 
@@ -139,18 +163,15 @@ def generate_pdf_preview(file_bytes, mode="color", dpi=120):
         if pdf.page_count == 0:
             return None
 
-        # Obtener solamente la primera pagina.
-
-        page = pdf[0]
-
-        pix = page.get_pixmap(
-            dpi=dpi,
+        pix = pdf[0].get_pixmap(
+            dpi=120,
             alpha=False
         )
 
-        image_bytes = pix.tobytes("png")
+        output = BytesIO(
+            pix.tobytes("png")
+        )
 
-        output = BytesIO(image_bytes)
         output.seek(0)
 
         return output
@@ -158,6 +179,53 @@ def generate_pdf_preview(file_bytes, mode="color", dpi=120):
     finally:
 
         pdf.close()
+
+
+# ==============================
+# PROCESAMIENTO DE IMAGENES
+# ==============================
+
+def process_image(file_bytes, mode="color", contrast=1.0):
+
+    with Image.open(BytesIO(file_bytes)) as original:
+
+        if mode == "bw":
+
+            img = original.convert("L")
+
+        else:
+
+            img = original.convert("RGB")
+
+        if contrast != 1.0:
+
+            img = ImageEnhance.Contrast(img).enhance(
+                contrast
+            )
+
+        output = BytesIO()
+
+        img.save(
+            output,
+            format="JPEG",
+            quality=95
+        )
+
+        return output.getvalue()
+
+
+def generate_image_preview(file_bytes, mode="color", contrast=1.0):
+
+    processed = process_image(
+        file_bytes,
+        mode=mode,
+        contrast=contrast
+    )
+
+    output = BytesIO(processed)
+    output.seek(0)
+
+    return output
 
 
 # ==============================
@@ -415,39 +483,30 @@ def send_email_resend(
 
         headers["Idempotency-Key"] = idempotency_key
 
-    try:
+    response = requests.post(
+        "https://api.resend.com/emails",
+        headers=headers,
+        json=params,
+        timeout=60
+    )
 
-        response = requests.post(
-            "https://api.resend.com/emails",
-            headers=headers,
-            json=params,
-            timeout=60
-        )
-
-        if not response.ok:
-
-            raise Exception(
-                f"Resend HTTP {response.status_code}: "
-                f"{response.text}"
-            )
-
-        result = response.json()
-
-        email_id = result.get("id")
-
-        if not email_id:
-
-            raise Exception(
-                f"Resend no devolvio un ID: {result}"
-            )
-
-        return email_id
-
-    except Exception as e:
+    if not response.ok:
 
         raise Exception(
-            f"Error de Resend ({type(e).__name__}): {str(e)}"
+            f"Resend HTTP {response.status_code}: {response.text}"
         )
+
+    result = response.json()
+
+    email_id = result.get("id")
+
+    if not email_id:
+
+        raise Exception(
+            f"Resend no devolvió un ID: {result}"
+        )
+
+    return email_id
 
 
 # ==============================
@@ -520,7 +579,168 @@ def lock_heartbeat():
 
 
 # ==============================
-# TECLADOS INLINE
+# UTILIDADES DE PREVIEW
+# ==============================
+
+def delete_current_preview(chat_id):
+
+    data = user_data.get(chat_id)
+
+    if not data:
+        return
+
+    message_id = data.get("preview_message_id")
+
+    if not message_id:
+        return
+
+    try:
+
+        bot.delete_message(
+            chat_id,
+            message_id
+        )
+
+    except Exception as e:
+
+        print(
+            f"No se pudo borrar la preview: {e}"
+        )
+
+    data["preview_message_id"] = None
+
+
+def is_previewable(file):
+
+    return (
+        file["extension"] == ".pdf"
+        or file["extension"] in CONVERTIBLE_IMAGES
+    )
+
+
+def send_file_preview(chat_id, index):
+
+    data = user_data.get(chat_id)
+
+    if not data:
+        return False
+
+    if index < 0 or index >= len(data["files"]):
+        return False
+
+    file = data["files"][index]
+
+    if not is_previewable(file):
+
+        bot.send_message(
+            chat_id,
+            "Este formato no permite generar una preview."
+        )
+
+        return False
+
+    mode = file["mode"]
+    contrast = file["contrast"]
+
+    try:
+
+        if file["extension"] == ".pdf":
+
+            preview = generate_pdf_preview(
+                file["bytes"],
+                mode=mode,
+                contrast=contrast
+            )
+
+        else:
+
+            preview = generate_image_preview(
+                file["bytes"],
+                mode=mode,
+                contrast=contrast
+            )
+
+        if preview is None:
+            return False
+
+        caption = (
+            f"👁 PREVIEW {index + 1}/{len(data['files'])}\n"
+            f"📄 {file['filename']}\n"
+            f"Modo: {'A COLOR' if mode == 'color' else 'BLANCO Y NEGRO'}\n"
+            f"Contraste: {contrast:.2f}x"
+        )
+
+        # Primero se envía la nueva preview.
+        # Solo si funciona se elimina la anterior.
+
+        if file["extension"] == ".pdf":
+
+            sent = bot.send_photo(
+                chat_id,
+                preview,
+                caption=caption
+            )
+
+        else:
+
+            sent = bot.send_photo(
+                chat_id,
+                preview,
+                caption=caption
+            )
+
+        old_message_id = data.get("preview_message_id")
+
+        data["preview_message_id"] = sent.message_id
+        data["preview_index"] = index
+
+        if old_message_id:
+
+            try:
+
+                bot.delete_message(
+                    chat_id,
+                    old_message_id
+                )
+
+            except Exception as e:
+
+                print(
+                    f"No se pudo borrar la preview anterior: {e}"
+                )
+
+        return True
+
+    except Exception as e:
+
+        print(
+            f"Error generando preview: {type(e).__name__}: {e}"
+        )
+
+        bot.send_message(
+            chat_id,
+            f"❌ No se pudo generar la preview.\n{str(e)}"
+        )
+
+        return False
+
+
+def next_preview_index(data, current_index):
+
+    files = data["files"]
+
+    for offset in range(1, len(files) + 1):
+
+        index = (current_index + offset) % len(files)
+
+        if is_previewable(files[index]):
+            return index
+
+    return None
+
+
+# ==============================
+# TECLADOS
 # ==============================
 
 def main_menu_keyboard():
@@ -564,7 +784,7 @@ def upload_keyboard():
 
     markup.row(
         types.InlineKeyboardButton(
-            "🎨 ELIGE EL COLOR",
+            "✅ FINALIZAR CARGA",
             callback_data="choose_mode"
         )
     )
@@ -585,11 +805,14 @@ def mode_keyboard():
 
     markup.row(
         types.InlineKeyboardButton(
-            "🌈 A COLOR",
+            "🌈 TODOS A COLOR",
             callback_data="mode_color"
-        ),
+        )
+    )
+
+    markup.row(
         types.InlineKeyboardButton(
-            "⚫ BLANCO Y NEGRO",
+            "⚫ TODOS EN BLANCO Y NEGRO",
             callback_data="mode_bw"
         )
     )
@@ -608,34 +831,108 @@ def mode_keyboard():
     return markup
 
 
-def confirm_keyboard():
+def file_list_keyboard(data):
 
     markup = types.InlineKeyboardMarkup()
 
-    # NUEVO: BOTON DE PREVIEW
+    for index, file in enumerate(data["files"]):
+
+        changed = (
+            file["mode"] != data["default_mode"]
+            or file["contrast"] != 1.0
+        )
+
+        marker = "✏️ " if changed else ""
+
+        name = file["filename"]
+
+        if len(name) > 30:
+            name = name[:27] + "..."
+
+        markup.row(
+            types.InlineKeyboardButton(
+                f"{marker}{index + 1}. {name}",
+                callback_data=f"file:{index}"
+            )
+        )
 
     markup.row(
         types.InlineKeyboardButton(
-            "👁 VER PREVIEW",
-            callback_data="preview"
+            "🖨️ FINALIZAR Y PREPARAR IMPRESIÓN",
+            callback_data="finish_print"
         )
     )
 
     markup.row(
         types.InlineKeyboardButton(
-            "✅ CONFIRMAR IMPRESION",
-            callback_data="confirm_print"
+            "❌ CANCELAR TANDA",
+            callback_data="cancel"
         )
     )
 
+    return markup
+
+
+def editor_keyboard(file):
+
+    markup = types.InlineKeyboardMarkup()
+
+    if is_previewable(file):
+
+        markup.row(
+            types.InlineKeyboardButton(
+                "👁 VER PREVIEW",
+                callback_data="preview_current"
+            ),
+            types.InlineKeyboardButton(
+                "⏭ SIGUIENTE ARCHIVO",
+                callback_data="preview_next"
+            )
+        )
+
     markup.row(
         types.InlineKeyboardButton(
-            "⬅️ VOLVER",
-            callback_data="back_mode"
+            "🌈 A COLOR",
+            callback_data="set_color"
         ),
         types.InlineKeyboardButton(
-            "❌ CANCELAR",
-            callback_data="cancel"
+            "⚫ BLANCO Y NEGRO",
+            callback_data="set_bw"
+        )
+    )
+
+    markup.row(
+        types.InlineKeyboardButton(
+            "➖ REDUCIR CONTRASTE",
+            callback_data="contrast_down"
+        )
+    )
+
+    markup.row(
+        types.InlineKeyboardButton(
+            "➕ AUMENTAR CONTRASTE",
+            callback_data="contrast_up"
+        )
+    )
+
+    markup.row(
+        types.InlineKeyboardButton(
+            "↩️ RESTAURAR CONTRASTE",
+            callback_data="contrast_reset"
+        )
+    )
+
+    markup.row(
+        types.InlineKeyboardButton(
+            "↩️ CANCELAR EDICIÓN",
+            callback_data="cancel_edit"
+        )
+    )
+
+    markup.row(
+        types.InlineKeyboardButton(
+            "⬅️ VOLVER A ARCHIVOS",
+            callback_data="file_list"
         )
     )
 
@@ -657,7 +954,7 @@ def back_main_keyboard():
 
 
 # ==============================
-# MENU PRINCIPAL
+# MENUS
 # ==============================
 
 def show_main_menu(chat_id):
@@ -665,9 +962,138 @@ def show_main_menu(chat_id):
     bot.send_message(
         chat_id,
         "🏠 MENU PRINCIPAL\n\n"
-        "¿Que deseas hacer?",
+        "¿Qué deseas hacer?",
         reply_markup=main_menu_keyboard()
     )
+
+
+def show_file_list(chat_id, message_id=None):
+
+    data = user_data.get(chat_id)
+
+    if not data:
+        return
+
+    lines = [
+        "📋 ARCHIVOS DE LA TANDA",
+        "",
+        "Selecciona un archivo para editarlo.",
+        "",
+        "✏️ indica que tiene cambios.",
+        ""
+    ]
+
+    for index, file in enumerate(data["files"]):
+
+        changed = (
+            file["mode"] != data["default_mode"]
+            or file["contrast"] != 1.0
+        )
+
+        marker = "✏️ " if changed else ""
+
+        mode_text = (
+            "Color"
+            if file["mode"] == "color"
+            else "Blanco y negro"
+        )
+
+        lines.append(
+            f"{marker}{index + 1}. {file['filename']} — "
+            f"{mode_text}, contraste {file['contrast']:.2f}x"
+        )
+
+    text = "\n".join(lines)
+
+    markup = file_list_keyboard(data)
+
+    if message_id:
+
+        try:
+
+            bot.edit_message_text(
+                text,
+                chat_id,
+                message_id,
+                reply_markup=markup
+            )
+
+            data["menu_message_id"] = message_id
+            return
+
+        except Exception:
+            pass
+
+    sent = bot.send_message(
+        chat_id,
+        text,
+        reply_markup=markup
+    )
+
+    data["menu_message_id"] = sent.message_id
+
+
+def show_file_editor(chat_id, index, message_id=None):
+
+    data = user_data.get(chat_id)
+
+    if not data:
+        return
+
+    if index < 0 or index >= len(data["files"]):
+        return
+
+    file = data["files"][index]
+
+    data["editing_index"] = index
+
+    data["edit_snapshot"] = {
+        "mode": file["mode"],
+        "contrast": file["contrast"]
+    }
+
+    mode_text = (
+        "🌈 A COLOR"
+        if file["mode"] == "color"
+        else "⚫ BLANCO Y NEGRO"
+    )
+
+    text = (
+        f"🛠 EDITANDO ARCHIVO {index + 1}/{len(data['files'])}\n\n"
+        f"📄 {file['filename']}\n\n"
+        f"Modo: {mode_text}\n"
+        f"Contraste: {file['contrast']:.2f}x\n\n"
+        "Selecciona los ajustes que deseas aplicar.\n"
+        "Los cambios se utilizarán tanto en la preview "
+        "como en la impresión."
+    )
+
+    markup = editor_keyboard(file)
+
+    if message_id:
+
+        try:
+
+            bot.edit_message_text(
+                text,
+                chat_id,
+                message_id,
+                reply_markup=markup
+            )
+
+            data["menu_message_id"] = message_id
+            return
+
+        except Exception:
+            pass
+
+    sent = bot.send_message(
+        chat_id,
+        text,
+        reply_markup=markup
+    )
+
+    data["menu_message_id"] = sent.message_id
 
 
 # ==============================
@@ -682,18 +1108,23 @@ def start_printing(chat_id):
         "collecting": True,
         "processing": False,
         "mode": None,
-        "batch_id": str(uuid.uuid4())
+        "default_mode": None,
+        "batch_id": str(uuid.uuid4()),
+        "preview_message_id": None,
+        "preview_index": None,
+        "menu_message_id": None,
+        "editing_index": None,
+        "edit_snapshot": None
     }
 
     bot.send_message(
         chat_id,
         "📥 ENVIAR ARCHIVOS\n\n"
         "Puedes enviar hasta 10 archivos "
-        "con un maximo de 20 MB en total.\n\n"
-        "Envia tus documentos o fotografias "
-        "uno por uno.\n\n"
-        "Cuando termines, pulsa ELEGIR COLOR.",
-        reply_markup=cancel_keyboard()
+        "con un máximo de 20 MB en total.\n\n"
+        "Envía tus documentos o fotografías uno por uno.\n\n"
+        "Cuando termines, pulsa FINALIZAR CARGA.",
+        reply_markup=upload_keyboard()
     )
 
 
@@ -706,58 +1137,35 @@ def show_guide(chat_id):
     guide = (
         "📖 GUIA DE IMPRESION\n\n"
 
-        "📁 ARCHIVOS ADMITIDOS\n\n"
+        "📁 ARCHIVOS ADMITIDOS\n"
+        "PDF, JPG, JPEG, PNG, BMP, GIF, TIF, TIFF, "
+        "TXT, DOC, DOCX, XLS, XLSX, PPT y PPTX.\n\n"
 
-        "DOCUMENTOS:\n"
-        "• PDF\n"
-        "• TXT\n"
-        "• DOC / DOCX\n"
-        "• XLS / XLSX\n"
-        "• PPT / PPTX\n\n"
+        "📦 LIMITES\n"
+        "• Máximo 10 archivos por tanda.\n"
+        "• Máximo 20 MB en total.\n\n"
 
-        "IMAGENES:\n"
-        "• JPG / JPEG\n"
-        "• PNG\n"
-        "• BMP\n"
-        "• GIF\n"
-        "• TIF / TIFF\n\n"
+        "🖨️ EDICION INDIVIDUAL\n"
+        "Puedes configurar cada archivo por separado:\n"
+        "• A color o blanco y negro.\n"
+        "• Aumentar o reducir contraste.\n"
+        "• Restaurar el contraste normal.\n"
+        "• Cancelar la edición y recuperar los ajustes anteriores.\n\n"
 
-        "📦 LIMITES POR ENVIO\n\n"
-        "• Maximo 10 archivos por tanda.\n"
-        "• Maximo 20 MB en total por correo.\n\n"
+        "👁 PREVIEWS\n"
+        "Puedes visualizar la primera página de cada PDF "
+        "y las imágenes compatibles.\n"
+        "Al mostrar otra preview, la anterior se elimina "
+        "automáticamente cuando la nueva se envía correctamente.\n\n"
 
-        "🖨️ MODOS DE IMPRESION\n\n"
-
-        "🌈 A COLOR:\n"
-        "Los archivos se envian sin convertir.\n\n"
-
-        "⚫ BLANCO Y NEGRO:\n"
-        "Los PDF se convierten a escala de grises.\n"
-        "Las imagenes compatibles se convierten "
-        "a escala de grises usando Pillow.\n\n"
-
-        "👁 PREVIEW:\n"
-        "Puedes visualizar la primera pagina de cada PDF "
-        "antes de confirmar la impresion.\n\n"
-
-        "📌 COMO IMPRIMIR\n\n"
-
-        "1. Pulsa IMPRIMIR.\n"
-        "2. Envia tus archivos uno por uno.\n"
-        "3. Pulsa ELEGIR COLOR.\n"
-        "4. Selecciona A COLOR o BLANCO Y NEGRO.\n"
-        "5. Opcionalmente, pulsa VER PREVIEW.\n"
-        "6. Confirma la impresion.\n\n"
-
-        "⚠️ INFORMACION IMPORTANTE\n\n"
-
-        "• JPG, JPEG, PNG y BMP se pueden convertir.\n"
-        "• GIF y TIFF se envian en su formato original.\n"
-        "• Los documentos de Office se envian sin modificar.\n"
-        "• El tamaño de papel y otras opciones dependen "
-        "de la configuracion de la Brother.\n"
-        "• La aceptacion del correo no garantiza que "
-        "la impresora haya terminado de imprimir."
+        "⚠️ IMPORTANTE\n"
+        "• PDF: se rasteriza al modificar modo o contraste.\n"
+        "• JPG, JPEG, PNG y BMP: se procesan como imágenes.\n"
+        "• GIF, TIFF y documentos de Office se envían sin "
+        "conversión de modo ni contraste.\n"
+        "• Los cambios de contraste y blanco y negro "
+        "no se aplican a documentos de Office.\n"
+        "• La preview muestra solo la primera página del PDF."
     )
 
     bot.send_message(
@@ -820,105 +1228,15 @@ def check_auth(message):
 
 
 # ==============================
-# ENVIAR PREVIEWS
-# ==============================
-
-def send_previews(chat_id):
-
-    data = user_data.get(chat_id)
-
-    if not data:
-
-        bot.send_message(
-            chat_id,
-            "No hay una tanda activa."
-        )
-
-        return
-
-    mode = data.get("mode", "color")
-
-    pdf_files = [
-        file for file in data["files"]
-        if file["extension"] == ".pdf"
-    ]
-
-    if not pdf_files:
-
-        bot.send_message(
-            chat_id,
-            "📄 No hay archivos PDF para mostrar."
-        )
-
-        return
-
-    bot.send_message(
-        chat_id,
-        f"👁 GENERANDO PREVIEWS\n\n"
-        f"Se mostrara la primera pagina de "
-        f"{len(pdf_files)} PDF."
-    )
-
-    for index, file in enumerate(pdf_files, start=1):
-
-        try:
-
-            preview = generate_pdf_preview(
-                file["bytes"],
-                mode=mode,
-                dpi=120
-            )
-
-            if preview is None:
-
-                bot.send_message(
-                    chat_id,
-                    f"⚠️ {file['filename']}: el PDF esta vacio."
-                )
-
-                continue
-
-            bot.send_photo(
-                chat_id,
-                preview,
-                caption=(
-                    f"📄 PREVIEW {index}/{len(pdf_files)}\n"
-                    f"{file['filename']}\n"
-                    "Primera pagina"
-                )
-            )
-
-        except Exception as e:
-
-            print(
-                f"Error generando preview de "
-                f"{file['filename']}: {type(e).__name__}: {e}"
-            )
-
-            bot.send_message(
-                chat_id,
-                f"❌ No se pudo generar la preview de "
-                f"{file['filename']}.\n"
-                f"Detalle: {str(e)}"
-            )
-
-    bot.send_message(
-        chat_id,
-        "✅ PREVIEWS FINALIZADAS\n\n"
-        "Cuando estes conforme, puedes volver al resumen "
-        "y confirmar la impresion.",
-        reply_markup=confirm_keyboard()
-    )
-
-
-# ==============================
-# CALLBACKS DE TELEGRAM
+# CALLBACKS
 # ==============================
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
 
     chat_id = call.message.chat.id
+    action = call.data
+    message_id = call.message.message_id
 
     if chat_id not in auth_users:
 
@@ -929,15 +1247,17 @@ def handle_callbacks(call):
 
         return
 
-    action = call.data
-
     bot.answer_callback_query(call.id)
+
+    data = user_data.get(chat_id)
 
     # --------------------------
     # MENU PRINCIPAL
     # --------------------------
 
     if action == "main_menu":
+
+        delete_current_preview(chat_id)
 
         user_data.pop(chat_id, None)
 
@@ -952,290 +1272,330 @@ def handle_callbacks(call):
         show_guide(chat_id)
 
     # --------------------------
-    # CANCELAR
+    # CANCELAR TANDA
     # --------------------------
 
     elif action == "cancel":
+
+        delete_current_preview(chat_id)
 
         user_data.pop(chat_id, None)
 
         bot.send_message(
             chat_id,
-            "❌ IMPRESION CANCELADA\n\n"
+            "❌ TANDA CANCELADA\n\n"
             "Se descartaron los archivos pendientes.",
             reply_markup=main_menu_keyboard()
         )
 
     # --------------------------
-    # ELEGIR MODO
+    # FINALIZAR CARGA
     # --------------------------
 
     elif action == "choose_mode":
 
-        data = user_data.get(chat_id)
-
-        if not data or not data.get("files"):
+        if not data or not data["files"]:
 
             bot.send_message(
                 chat_id,
-                "Todavia no has enviado ningun archivo.",
-                reply_markup=cancel_keyboard()
+                "Todavía no has enviado ningún archivo."
             )
 
             return
 
-        if not data.get("collecting"):
-
-            bot.send_message(
-                chat_id,
-                "Esta tanda ya no acepta archivos."
-            )
-
+        if not data["collecting"]:
             return
 
         bot.send_message(
             chat_id,
-            "🖨️ SELECCIONA EL MODO DE IMPRESION\n\n"
-            "🌈 A COLOR: conserva los archivos originales.\n\n"
-            "⚫ BLANCO Y NEGRO: convierte los PDF "
-            "y las imagenes compatibles a escala de grises.",
+            "🖨️ MODO INICIAL\n\n"
+            "Selecciona el modo que se aplicará "
+            "inicialmente a todos los archivos.\n\n"
+            "Después podrás modificar cada archivo "
+            "individualmente.",
             reply_markup=mode_keyboard()
         )
 
     # --------------------------
-    # VOLVER A CARGAR ARCHIVOS
+    # VOLVER A CARGA
     # --------------------------
 
     elif action == "back_upload":
 
-        data = user_data.get(chat_id)
-
         if not data:
-
-            show_main_menu(chat_id)
             return
 
+        delete_current_preview(chat_id)
+
         data["mode"] = None
+        data["default_mode"] = None
         data["collecting"] = True
+
+        for file in data["files"]:
+
+            file["mode"] = None
+            file["contrast"] = 1.0
 
         bot.send_message(
             chat_id,
             "📥 Puedes seguir enviando archivos.\n\n"
-            "Cuando termines, pulsa ELEGIR COLOR.",
+            "Cuando termines, pulsa FINALIZAR CARGA.",
             reply_markup=upload_keyboard()
         )
 
     # --------------------------
-    # MODO COLOR
+    # SELECCION DEL MODO INICIAL
     # --------------------------
 
-    elif action == "mode_color":
+    elif action in ("mode_color", "mode_bw"):
 
-        data = user_data.get(chat_id)
-
-        if not data or not data.get("files"):
-
-            bot.send_message(
-                chat_id,
-                "No hay archivos en esta tanda."
-            )
-
+        if not data or not data["files"]:
             return
 
-        data["mode"] = "color"
+        mode = (
+            "color"
+            if action == "mode_color"
+            else "bw"
+        )
+
+        data["mode"] = mode
+        data["default_mode"] = mode
         data["collecting"] = False
 
-        show_confirmation(chat_id, data)
+        for file in data["files"]:
 
-    # --------------------------
-    # MODO BLANCO Y NEGRO
-    # --------------------------
+            file["mode"] = mode
+            file["contrast"] = 1.0
 
-    elif action == "mode_bw":
-
-        data = user_data.get(chat_id)
-
-        if not data or not data.get("files"):
-
-            bot.send_message(
-                chat_id,
-                "No hay archivos en esta tanda."
-            )
-
-            return
-
-        data["mode"] = "bw"
-        data["collecting"] = False
-
-        show_confirmation(chat_id, data)
-
-    # --------------------------
-    # VOLVER A ELEGIR MODO
-    # --------------------------
-
-    elif action == "back_mode":
-
-        data = user_data.get(chat_id)
-
-        if not data:
-
-            show_main_menu(chat_id)
-            return
-
-        bot.send_message(
+        show_file_list(
             chat_id,
-            "Selecciona nuevamente el modo de impresion:",
-            reply_markup=mode_keyboard()
+            message_id
         )
 
     # --------------------------
-    # NUEVO: VER PREVIEW
+    # ABRIR ARCHIVO
     # --------------------------
 
-    elif action == "preview":
+    elif action.startswith("file:"):
 
-        data = user_data.get(chat_id)
+        if not data or data["collecting"]:
+            return
 
-        if not data or not data.get("files"):
+        try:
+
+            index = int(action.split(":")[1])
+
+        except ValueError:
+            return
+
+        show_file_editor(
+            chat_id,
+            index,
+            message_id
+        )
+
+    # --------------------------
+    # LISTA DE ARCHIVOS
+    # --------------------------
+
+    elif action == "file_list":
+
+        if not data:
+            return
+
+        delete_current_preview(chat_id)
+
+        show_file_list(
+            chat_id,
+            message_id
+        )
+
+    # --------------------------
+    # MODO INDIVIDUAL
+    # --------------------------
+
+    elif action in ("set_color", "set_bw"):
+
+        if not data:
+            return
+
+        index = data.get("editing_index")
+
+        if index is None:
+            return
+
+        file = data["files"][index]
+
+        file["mode"] = (
+            "color"
+            if action == "set_color"
+            else "bw"
+        )
+
+        show_file_editor(
+            chat_id,
+            index,
+            message_id
+        )
+
+    # --------------------------
+    # CONTRASTE
+    # --------------------------
+
+    elif action in (
+        "contrast_up",
+        "contrast_down",
+        "contrast_reset"
+    ):
+
+        if not data:
+            return
+
+        index = data.get("editing_index")
+
+        if index is None:
+            return
+
+        file = data["files"][index]
+
+        if action == "contrast_up":
+
+            file["contrast"] = min(
+                CONTRAST_MAX,
+                round(file["contrast"] + CONTRAST_STEP, 2)
+            )
+
+        elif action == "contrast_down":
+
+            file["contrast"] = max(
+                CONTRAST_MIN,
+                round(file["contrast"] - CONTRAST_STEP, 2)
+            )
+
+        elif action == "contrast_reset":
+
+            file["contrast"] = 1.0
+
+        show_file_editor(
+            chat_id,
+            index,
+            message_id
+        )
+
+    # --------------------------
+    # CANCELAR EDICION
+    # --------------------------
+
+    elif action == "cancel_edit":
+
+        if not data:
+            return
+
+        index = data.get("editing_index")
+        snapshot = data.get("edit_snapshot")
+
+        if index is None or snapshot is None:
+            return
+
+        file = data["files"][index]
+
+        file["mode"] = snapshot["mode"]
+        file["contrast"] = snapshot["contrast"]
+
+        delete_current_preview(chat_id)
+
+        show_file_list(
+            chat_id,
+            message_id
+        )
+
+    # --------------------------
+    # PREVIEW ACTUAL
+    # --------------------------
+
+    elif action == "preview_current":
+
+        if not data:
+            return
+
+        index = data.get("editing_index")
+
+        if index is not None:
+
+            send_file_preview(
+                chat_id,
+                index
+            )
+
+    # --------------------------
+    # SIGUIENTE PREVIEW
+    # --------------------------
+
+    elif action == "preview_next":
+
+        if not data:
+            return
+
+        current = data.get("preview_index")
+
+        if current is None:
+            current = data.get("editing_index", 0)
+
+        next_index = next_preview_index(
+            data,
+            current
+        )
+
+        if next_index is None:
 
             bot.send_message(
                 chat_id,
-                "No hay archivos para mostrar."
+                "No hay otros archivos con preview disponible."
             )
 
             return
 
-        if data.get("collecting"):
-
-            bot.send_message(
-                chat_id,
-                "Primero debes seleccionar el modo de impresion."
-            )
-
-            return
-
-        if data.get("processing"):
-
-            bot.send_message(
-                chat_id,
-                "La tanda ya se esta procesando."
-            )
-
-            return
-
-        send_previews(chat_id)
+        send_file_preview(
+            chat_id,
+            next_index
+        )
 
     # --------------------------
-    # CONFIRMAR IMPRESION
+    # FINALIZAR Y PREPARAR IMPRESION
     # --------------------------
 
-    elif action == "confirm_print":
+    elif action == "finish_print":
 
         with callback_lock:
 
             data = user_data.get(chat_id)
 
-            if not data or not data.get("files"):
-
-                bot.send_message(
-                    chat_id,
-                    "No hay archivos para imprimir."
-                )
-
+            if not data or not data["files"]:
                 return
 
             if data.get("processing"):
-
-                bot.send_message(
-                    chat_id,
-                    "Esta tanda ya se esta procesando."
-                )
-
-                return
-
-            if data.get("collecting"):
-
-                bot.send_message(
-                    chat_id,
-                    "Primero debes seleccionar el modo."
-                )
-
-                return
-
-            if data.get("mode") not in ("color", "bw"):
-
-                bot.send_message(
-                    chat_id,
-                    "Selecciona un modo de impresion."
-                )
-
                 return
 
             data["processing"] = True
 
             files = data["files"]
             batch_id = data["batch_id"]
-            mode = data["mode"]
+
+            delete_current_preview(chat_id)
 
             user_data.pop(chat_id, None)
 
         send_to_printer(
             chat_id,
             files,
-            batch_id,
-            mode
+            batch_id
         )
 
         show_main_menu(chat_id)
 
 
 # ==============================
-# CONFIRMACION
-# ==============================
-
-def show_confirmation(chat_id, data):
-
-    mode = data["mode"]
-
-    if mode == "color":
-
-        mode_text = "🌈 A COLOR"
-
-    else:
-
-        mode_text = "⚫ BLANCO Y NEGRO"
-
-    total_mb = data["total_size"] / (1024 * 1024)
-
-    pdf_count = sum(
-        1 for file in data["files"]
-        if file["extension"] == ".pdf"
-    )
-
-    preview_text = ""
-
-    if pdf_count > 0:
-
-        preview_text = (
-            f"\nPDF para previsualizar: {pdf_count}"
-        )
-
-    bot.send_message(
-        chat_id,
-        "📋 RESUMEN DE IMPRESION\n\n"
-        f"Archivos: {len(data['files'])}/{MAX_FILES}\n"
-        f"Tamaño total: {total_mb:.2f} MB\n"
-        f"Modo: {mode_text}"
-        f"{preview_text}\n\n"
-        "Puedes ver la primera pagina de cada PDF "
-        "antes de imprimir.\n\n"
-        "¿Deseas enviar estos archivos a la impresora?",
-        reply_markup=confirm_keyboard()
-    )
-
-
-# ==============================
-# AGREGAR ARCHIVOS A LA TANDA
+# AGREGAR ARCHIVOS
 # ==============================
 
 def add_file_to_batch(chat_id, filename, file_bytes):
@@ -1266,7 +1626,7 @@ def add_file_to_batch(chat_id, filename, file_bytes):
 
         bot.send_message(
             chat_id,
-            "Has alcanzado el limite de 10 archivos."
+            "Has alcanzado el límite de 10 archivos."
         )
 
         return
@@ -1278,7 +1638,7 @@ def add_file_to_batch(chat_id, filename, file_bytes):
         bot.send_message(
             chat_id,
             "Este archivo supera el espacio disponible.\n"
-            "El maximo total es de 20 MB."
+            "El máximo total es de 20 MB."
         )
 
         return
@@ -1286,7 +1646,9 @@ def add_file_to_batch(chat_id, filename, file_bytes):
     data["files"].append({
         "filename": filename,
         "bytes": file_bytes,
-        "extension": extension
+        "extension": extension,
+        "mode": None,
+        "contrast": 1.0
     })
 
     data["total_size"] += file_size
@@ -1298,7 +1660,7 @@ def add_file_to_batch(chat_id, filename, file_bytes):
         "✅ ARCHIVO RECIBIDO\n\n"
         f"Nombre: {filename}\n"
         f"Archivos: {len(data['files'])}/{MAX_FILES}\n"
-        f"Tamano total: {total_mb:.2f} MB / 20 MB",
+        f"Tamaño total: {total_mb:.2f} MB / 20 MB",
         reply_markup=upload_keyboard()
     )
 
@@ -1307,7 +1669,7 @@ def add_file_to_batch(chat_id, filename, file_bytes):
         bot.send_message(
             chat_id,
             "Has alcanzado los 10 archivos. "
-            "Ya puedes elegir el modo de impresion.",
+            "Ya puedes finalizar la carga.",
             reply_markup=upload_keyboard()
         )
 
@@ -1357,7 +1719,7 @@ def handle_photo(message):
 
         bot.send_message(
             chat_id,
-            f"Error al recibir la fotografia: {str(e)}"
+            f"Error al recibir la fotografía: {str(e)}"
         )
 
 
@@ -1409,7 +1771,7 @@ def handle_document(message):
 
             bot.send_message(
                 chat_id,
-                "El archivo supera el limite de 20 MB."
+                "El archivo supera el límite de 20 MB."
             )
 
             return
@@ -1440,7 +1802,7 @@ def handle_document(message):
 # PREPARAR ARCHIVOS
 # ==============================
 
-def prepare_attachments(files, mode):
+def prepare_attachments(files):
 
     attachments = []
 
@@ -1450,40 +1812,41 @@ def prepare_attachments(files, mode):
         file_bytes = file["bytes"]
         extension = file["extension"]
 
-        # PDF A BLANCO Y NEGRO
+        mode = file.get("mode", "color")
+        contrast = file.get("contrast", 1.0)
 
-        if mode == "bw" and extension == ".pdf":
+        # PDF
 
-            file_bytes = convert_pdf_to_bw(
-                file_bytes
-            )
+        if extension == ".pdf":
 
-        # IMAGENES A BLANCO Y NEGRO
+            if mode == "bw" or contrast != 1.0:
 
-        if mode == "bw" and extension in CONVERTIBLE_IMAGES:
+                file_bytes = process_pdf(
+                    file_bytes,
+                    mode=mode,
+                    contrast=contrast,
+                    dpi=200
+                )
 
-            with Image.open(BytesIO(file_bytes)) as original:
+        # IMAGENES COMPATIBLES
 
-                img = original.convert("L")
+        elif extension in CONVERTIBLE_IMAGES:
 
-                output = BytesIO()
+            if mode == "bw" or contrast != 1.0:
 
-                img.save(
-                    output,
-                    format="JPEG",
-                    quality=95
+                file_bytes = process_image(
+                    file_bytes,
+                    mode=mode,
+                    contrast=contrast
                 )
 
                 filename = (
                     os.path.splitext(filename)[0] + ".jpg"
                 )
 
-                file_bytes = output.getvalue()
-
         mime_type, _ = mimetypes.guess_type(filename)
 
         if not mime_type:
-
             mime_type = "application/octet-stream"
 
         attachments.append((
@@ -1499,48 +1862,32 @@ def prepare_attachments(files, mode):
 # ENVIO A IMPRESORA BROTHER
 # ==============================
 
-def send_to_printer(chat_id, files, batch_id, mode):
+def send_to_printer(chat_id, files, batch_id):
 
     try:
 
-        if mode == "color":
-
-            mode_text = "A COLOR"
-
-        else:
-
-            mode_text = "BLANCO Y NEGRO"
-
         bot.send_message(
             chat_id,
-            "⏳ PREPARANDO IMPRESION\n\n"
-            f"Modo seleccionado: {mode_text}\n"
-            "Preparando los archivos para la impresora..."
+            "⏳ PREPARANDO IMPRESIÓN\n\n"
+            "Aplicando los ajustes individuales de cada archivo..."
         )
 
-        attachments = prepare_attachments(
-            files,
-            mode
-        )
+        attachments = prepare_attachments(files)
 
         email_id = send_email_resend(
             to=PRINTER_EMAIL,
-
             subject=" ",
-
             html="<!-- -->",
-
             attachments=attachments,
-
             idempotency_key=f"telegram-print-{batch_id}"
         )
 
         bot.send_message(
             chat_id,
             "✅ ENVIANDO A LA IMPRESORA\n\n"
-            f"Modo: {mode_text}\n"
             f"Archivos enviados: {len(attachments)}\n"
-            "La impresion todavia debe ser confirmada "
+            f"Referencia: {email_id}\n\n"
+            "La impresión todavía debe ser confirmada "
             "por la impresora."
         )
 
