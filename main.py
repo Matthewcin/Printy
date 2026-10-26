@@ -1,3 +1,4 @@
+
 import os
 import threading
 import base64
@@ -250,7 +251,13 @@ def release_bot_lock():
 # RESEND
 # ==============================
 
-def send_email_resend(to, subject, text, attachments=None):
+def send_email_resend(
+    to,
+    subject,
+    text,
+    attachments=None,
+    idempotency_key=None
+):
 
     params = {
         "from": EMAIL_SENDER,
@@ -275,7 +282,16 @@ def send_email_resend(to, subject, text, attachments=None):
 
     try:
 
-        response = resend.Emails.send(params)
+        if idempotency_key:
+
+            response = resend.Emails.send(
+                params,
+                idempotency_key=idempotency_key
+            )
+
+        else:
+
+            response = resend.Emails.send(params)
 
         if isinstance(response, dict):
             email_id = response.get("id")
@@ -327,6 +343,10 @@ bot = telebot.TeleBot(TOKEN)
 auth_users = set()
 user_data = {}
 
+# Impide que dos callbacks procesen simultaneamente
+# la misma tanda.
+callback_lock = threading.Lock()
+
 
 # ==============================
 # RENOVACION DEL BLOQUEO
@@ -357,8 +377,6 @@ def lock_heartbeat():
                 f"{type(e).__name__}: {e}"
             )
 
-            # Ante un fallo de conexión no seguimos haciendo polling:
-            # el bloqueo podría vencer y permitir otra instancia.
             bot.stop_polling()
             return
 
@@ -554,7 +572,8 @@ def handle_menu(message):
         user_data[chat_id] = {
             "files": [],
             "total_size": 0,
-            "collecting": True
+            "collecting": True,
+            "batch_id": str(uuid.uuid4())
         }
 
         bot.send_message(
@@ -895,7 +914,7 @@ def prepare_attachments(files, is_color):
 # ENVIO A IMPRESORA BROTHER
 # ==============================
 
-def send_to_printer(chat_id, files, is_color):
+def send_to_printer(chat_id, files, is_color, batch_id):
 
     try:
 
@@ -911,12 +930,15 @@ def send_to_printer(chat_id, files, is_color):
 
         email_id = send_email_resend(
             to=PRINTER_EMAIL,
-            subject="Impresion desde Telegram",
-            text=(
-                "Documentos enviados desde el bot de Telegram.\n"
-                f"Cantidad de archivos: {len(attachments)}"
-            ),
-            attachments=attachments
+
+            # Sin descripcion en el asunto ni en el cuerpo.
+            subject=" ",
+            text="",
+
+            attachments=attachments,
+
+            # Misma tanda = misma clave de idempotencia.
+            idempotency_key=f"telegram-print-{batch_id}"
         )
 
         bot.send_message(
@@ -956,7 +978,11 @@ def handle_callbacks(call):
     if chat_id not in auth_users:
         return
 
-    if call.data in ["print_color", "print_bw"]:
+    if call.data not in ["print_color", "print_bw"]:
+        return
+
+    # Solo un callback puede reclamar una tanda a la vez.
+    with callback_lock:
 
         data = user_data.get(chat_id)
 
@@ -964,11 +990,8 @@ def handle_callbacks(call):
 
             bot.send_message(
                 chat_id,
-                "No se encontraron archivos. "
-                "Inicia una nueva impresion."
+                "Esta tanda ya fue procesada o no contiene archivos."
             )
-
-            show_main_menu(chat_id)
 
             return
 
@@ -981,19 +1004,35 @@ def handle_callbacks(call):
 
             return
 
+        if data.get("processing"):
+
+            bot.send_message(
+                chat_id,
+                "Esta tanda ya se esta procesando."
+            )
+
+            return
+
+        # Marcar la tanda como procesada.
+        data["processing"] = True
+
         is_color = call.data == "print_color"
 
         files = data["files"]
+        batch_id = data["batch_id"]
 
+        # Eliminarla para impedir un segundo envío.
         user_data.pop(chat_id, None)
 
-        send_to_printer(
-            chat_id,
-            files,
-            is_color
-        )
+    # Enviar fuera del bloqueo.
+    send_to_printer(
+        chat_id,
+        files,
+        is_color,
+        batch_id
+    )
 
-        show_main_menu(chat_id)
+    show_main_menu(chat_id)
 
 
 # ==============================
@@ -1038,13 +1077,13 @@ if __name__ == "__main__":
 
     init_db()
 
-    # Intentar adquirir el bloqueo antes de iniciar Telegram.
+    # Adquirir el bloqueo antes de iniciar Telegram.
     acquire_bot_lock()
 
     # Cargar usuarios autorizados.
     auth_users = get_auth_users()
 
-    # Iniciar la renovacion del bloqueo.
+    # Iniciar renovacion del bloqueo.
     lock_thread = threading.Thread(
         target=lock_heartbeat,
         daemon=True
@@ -1083,7 +1122,9 @@ if __name__ == "__main__":
 
         try:
             release_bot_lock()
+
         except Exception as e:
+
             print(
                 "No se pudo liberar el bloqueo: "
                 f"{type(e).__name__}: {e}"
