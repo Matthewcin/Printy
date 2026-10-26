@@ -1,4 +1,3 @@
-```python
 import os
 import threading
 import base64
@@ -1089,4 +1088,3 @@ if __name__ == "__main__":
                 "No se pudo liberar el bloqueo: "
                 f"{type(e).__name__}: {e}"
             )
-```
