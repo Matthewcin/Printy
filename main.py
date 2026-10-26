@@ -60,6 +60,7 @@ INSTANCE_ID = str(uuid.uuid4())
 lock_stop_event = threading.Event()
 lock_thread = None
 
+
 # ==============================
 # CONVERSOR B&N PDF
 # ==============================
@@ -74,6 +75,7 @@ def convert_pdf_to_bw(file_bytes, dpi=200):
     output_pdf = fitz.open()
 
     try:
+
         for page in source_pdf:
 
             pix = page.get_pixmap(
@@ -105,14 +107,65 @@ def convert_pdf_to_bw(file_bytes, dpi=200):
         return output.getvalue()
 
     finally:
+
         source_pdf.close()
         output_pdf.close()
+
+
+# ==============================
+# GENERAR PREVIEW PDF
+# ==============================
+
+def generate_pdf_preview(file_bytes, mode="color", dpi=120):
+
+    pdf_bytes = file_bytes
+
+    # En blanco y negro, usar exactamente
+    # el mismo PDF convertido que se enviara a imprimir.
+
+    if mode == "bw":
+
+        pdf_bytes = convert_pdf_to_bw(
+            file_bytes
+        )
+
+    pdf = fitz.open(
+        stream=pdf_bytes,
+        filetype="pdf"
+    )
+
+    try:
+
+        if pdf.page_count == 0:
+            return None
+
+        # Obtener solamente la primera pagina.
+
+        page = pdf[0]
+
+        pix = page.get_pixmap(
+            dpi=dpi,
+            alpha=False
+        )
+
+        image_bytes = pix.tobytes("png")
+
+        output = BytesIO(image_bytes)
+        output.seek(0)
+
+        return output
+
+    finally:
+
+        pdf.close()
+
 
 # ==============================
 # BASE DE DATOS
 # ==============================
 
 def get_db_connection():
+
     return psycopg2.connect(DATABASE_URL)
 
 
@@ -121,6 +174,7 @@ def init_db():
     conn = get_db_connection()
 
     try:
+
         cur = conn.cursor()
 
         cur.execute("""
@@ -141,6 +195,7 @@ def init_db():
         cur.close()
 
     finally:
+
         conn.close()
 
 
@@ -149,9 +204,12 @@ def get_auth_users():
     conn = get_db_connection()
 
     try:
+
         cur = conn.cursor()
 
-        cur.execute("SELECT chat_id FROM authorized_users")
+        cur.execute(
+            "SELECT chat_id FROM authorized_users"
+        )
 
         rows = cur.fetchall()
 
@@ -160,6 +218,7 @@ def get_auth_users():
         return set(row[0] for row in rows)
 
     finally:
+
         conn.close()
 
 
@@ -168,6 +227,7 @@ def add_auth_user(chat_id):
     conn = get_db_connection()
 
     try:
+
         cur = conn.cursor()
 
         cur.execute(
@@ -183,6 +243,7 @@ def add_auth_user(chat_id):
         cur.close()
 
     finally:
+
         conn.close()
 
 
@@ -196,6 +257,7 @@ def acquire_bot_lock():
     conn = get_db_connection()
 
     try:
+
         cur = conn.cursor()
 
         cur.execute(
@@ -230,6 +292,7 @@ def acquire_bot_lock():
         cur.close()
 
         if result is None:
+
             raise RuntimeError(
                 "Otra instancia del bot ya está ejecutándose. "
                 "No se iniciará Telegram."
@@ -238,6 +301,7 @@ def acquire_bot_lock():
         print("Bloqueo de instancia adquirido correctamente.")
 
     finally:
+
         conn.close()
 
 
@@ -246,6 +310,7 @@ def renew_bot_lock():
     conn = get_db_connection()
 
     try:
+
         cur = conn.cursor()
 
         cur.execute(
@@ -271,6 +336,7 @@ def renew_bot_lock():
         return result is not None
 
     finally:
+
         conn.close()
 
 
@@ -279,6 +345,7 @@ def release_bot_lock():
     conn = get_db_connection()
 
     try:
+
         cur = conn.cursor()
 
         cur.execute(
@@ -296,6 +363,7 @@ def release_bot_lock():
         print("Bloqueo de instancia liberado.")
 
     finally:
+
         conn.close()
 
 
@@ -344,6 +412,7 @@ def send_email_resend(
     }
 
     if idempotency_key:
+
         headers["Idempotency-Key"] = idempotency_key
 
     try:
@@ -356,6 +425,7 @@ def send_email_resend(
         )
 
         if not response.ok:
+
             raise Exception(
                 f"Resend HTTP {response.status_code}: "
                 f"{response.text}"
@@ -366,6 +436,7 @@ def send_email_resend(
         email_id = result.get("id")
 
         if not email_id:
+
             raise Exception(
                 f"Resend no devolvio un ID: {result}"
             )
@@ -388,6 +459,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
+
     return "Bot de impresion activo"
 
 
@@ -492,7 +564,7 @@ def upload_keyboard():
 
     markup.row(
         types.InlineKeyboardButton(
-            "🎨 ELEGIR COLOR",
+            "🎨 ELIGE EL COLOR",
             callback_data="choose_mode"
         )
     )
@@ -539,6 +611,15 @@ def mode_keyboard():
 def confirm_keyboard():
 
     markup = types.InlineKeyboardMarkup()
+
+    # NUEVO: BOTON DE PREVIEW
+
+    markup.row(
+        types.InlineKeyboardButton(
+            "👁 VER PREVIEW",
+            callback_data="preview"
+        )
+    )
 
     markup.row(
         types.InlineKeyboardButton(
@@ -648,14 +729,16 @@ def show_guide(chat_id):
         "🖨️ MODOS DE IMPRESION\n\n"
 
         "🌈 A COLOR:\n"
-        "Las imagenes se envian sin convertir.\n\n"
+        "Los archivos se envian sin convertir.\n\n"
 
         "⚫ BLANCO Y NEGRO:\n"
+        "Los PDF se convierten a escala de grises.\n"
         "Las imagenes compatibles se convierten "
         "a escala de grises usando Pillow.\n\n"
 
-        "Los PDF y documentos de Office se envian "
-        "sin modificar en ambos modos.\n\n"
+        "👁 PREVIEW:\n"
+        "Puedes visualizar la primera pagina de cada PDF "
+        "antes de confirmar la impresion.\n\n"
 
         "📌 COMO IMPRIMIR\n\n"
 
@@ -663,13 +746,14 @@ def show_guide(chat_id):
         "2. Envia tus archivos uno por uno.\n"
         "3. Pulsa ELEGIR COLOR.\n"
         "4. Selecciona A COLOR o BLANCO Y NEGRO.\n"
-        "5. Confirma la impresion.\n\n"
+        "5. Opcionalmente, pulsa VER PREVIEW.\n"
+        "6. Confirma la impresion.\n\n"
 
         "⚠️ INFORMACION IMPORTANTE\n\n"
 
         "• JPG, JPEG, PNG y BMP se pueden convertir.\n"
         "• GIF y TIFF se envian en su formato original.\n"
-        "• PDF y documentos no se modifican.\n"
+        "• Los documentos de Office se envian sin modificar.\n"
         "• El tamaño de papel y otras opciones dependen "
         "de la configuracion de la Brother.\n"
         "• La aceptacion del correo no garantiza que "
@@ -693,9 +777,11 @@ def send_welcome(message):
     chat_id = message.chat.id
 
     if chat_id in auth_users:
+
         show_main_menu(chat_id)
 
     else:
+
         bot.send_message(
             chat_id,
             "Ingrese la contraseña:"
@@ -734,6 +820,98 @@ def check_auth(message):
 
 
 # ==============================
+# ENVIAR PREVIEWS
+# ==============================
+
+def send_previews(chat_id):
+
+    data = user_data.get(chat_id)
+
+    if not data:
+
+        bot.send_message(
+            chat_id,
+            "No hay una tanda activa."
+        )
+
+        return
+
+    mode = data.get("mode", "color")
+
+    pdf_files = [
+        file for file in data["files"]
+        if file["extension"] == ".pdf"
+    ]
+
+    if not pdf_files:
+
+        bot.send_message(
+            chat_id,
+            "📄 No hay archivos PDF para mostrar."
+        )
+
+        return
+
+    bot.send_message(
+        chat_id,
+        f"👁 GENERANDO PREVIEWS\n\n"
+        f"Se mostrara la primera pagina de "
+        f"{len(pdf_files)} PDF."
+    )
+
+    for index, file in enumerate(pdf_files, start=1):
+
+        try:
+
+            preview = generate_pdf_preview(
+                file["bytes"],
+                mode=mode,
+                dpi=120
+            )
+
+            if preview is None:
+
+                bot.send_message(
+                    chat_id,
+                    f"⚠️ {file['filename']}: el PDF esta vacio."
+                )
+
+                continue
+
+            bot.send_photo(
+                chat_id,
+                preview,
+                caption=(
+                    f"📄 PREVIEW {index}/{len(pdf_files)}\n"
+                    f"{file['filename']}\n"
+                    "Primera pagina"
+                )
+            )
+
+        except Exception as e:
+
+            print(
+                f"Error generando preview de "
+                f"{file['filename']}: {type(e).__name__}: {e}"
+            )
+
+            bot.send_message(
+                chat_id,
+                f"❌ No se pudo generar la preview de "
+                f"{file['filename']}.\n"
+                f"Detalle: {str(e)}"
+            )
+
+    bot.send_message(
+        chat_id,
+        "✅ PREVIEWS FINALIZADAS\n\n"
+        "Cuando estes conforme, puedes volver al resumen "
+        "y confirmar la impresion.",
+        reply_markup=confirm_keyboard()
+    )
+
+
+# ==============================
 # CALLBACKS DE TELEGRAM
 # ==============================
 
@@ -762,6 +940,7 @@ def handle_callbacks(call):
     if action == "main_menu":
 
         user_data.pop(chat_id, None)
+
         show_main_menu(chat_id)
 
     elif action == "main_print":
@@ -817,9 +996,9 @@ def handle_callbacks(call):
         bot.send_message(
             chat_id,
             "🖨️ SELECCIONA EL MODO DE IMPRESION\n\n"
-            "🌈 A COLOR: conserva las imagenes originales.\n\n"
-            "⚫ BLANCO Y NEGRO: convierte las imagenes "
-            "compatibles a escala de grises.",
+            "🌈 A COLOR: conserva los archivos originales.\n\n"
+            "⚫ BLANCO Y NEGRO: convierte los PDF "
+            "y las imagenes compatibles a escala de grises.",
             reply_markup=mode_keyboard()
         )
 
@@ -832,6 +1011,7 @@ def handle_callbacks(call):
         data = user_data.get(chat_id)
 
         if not data:
+
             show_main_menu(chat_id)
             return
 
@@ -854,10 +1034,12 @@ def handle_callbacks(call):
         data = user_data.get(chat_id)
 
         if not data or not data.get("files"):
+
             bot.send_message(
                 chat_id,
                 "No hay archivos en esta tanda."
             )
+
             return
 
         data["mode"] = "color"
@@ -874,10 +1056,12 @@ def handle_callbacks(call):
         data = user_data.get(chat_id)
 
         if not data or not data.get("files"):
+
             bot.send_message(
                 chat_id,
                 "No hay archivos en esta tanda."
             )
+
             return
 
         data["mode"] = "bw"
@@ -894,6 +1078,7 @@ def handle_callbacks(call):
         data = user_data.get(chat_id)
 
         if not data:
+
             show_main_menu(chat_id)
             return
 
@@ -902,6 +1087,43 @@ def handle_callbacks(call):
             "Selecciona nuevamente el modo de impresion:",
             reply_markup=mode_keyboard()
         )
+
+    # --------------------------
+    # NUEVO: VER PREVIEW
+    # --------------------------
+
+    elif action == "preview":
+
+        data = user_data.get(chat_id)
+
+        if not data or not data.get("files"):
+
+            bot.send_message(
+                chat_id,
+                "No hay archivos para mostrar."
+            )
+
+            return
+
+        if data.get("collecting"):
+
+            bot.send_message(
+                chat_id,
+                "Primero debes seleccionar el modo de impresion."
+            )
+
+            return
+
+        if data.get("processing"):
+
+            bot.send_message(
+                chat_id,
+                "La tanda ya se esta procesando."
+            )
+
+            return
+
+        send_previews(chat_id)
 
     # --------------------------
     # CONFIRMAR IMPRESION
@@ -976,18 +1198,37 @@ def show_confirmation(chat_id, data):
     mode = data["mode"]
 
     if mode == "color":
+
         mode_text = "🌈 A COLOR"
+
     else:
+
         mode_text = "⚫ BLANCO Y NEGRO"
 
     total_mb = data["total_size"] / (1024 * 1024)
+
+    pdf_count = sum(
+        1 for file in data["files"]
+        if file["extension"] == ".pdf"
+    )
+
+    preview_text = ""
+
+    if pdf_count > 0:
+
+        preview_text = (
+            f"\nPDF para previsualizar: {pdf_count}"
+        )
 
     bot.send_message(
         chat_id,
         "📋 RESUMEN DE IMPRESION\n\n"
         f"Archivos: {len(data['files'])}/{MAX_FILES}\n"
         f"Tamaño total: {total_mb:.2f} MB\n"
-        f"Modo: {mode_text}\n\n"
+        f"Modo: {mode_text}"
+        f"{preview_text}\n\n"
+        "Puedes ver la primera pagina de cada PDF "
+        "antes de imprimir.\n\n"
         "¿Deseas enviar estos archivos a la impresora?",
         reply_markup=confirm_keyboard()
     )
@@ -1210,11 +1451,15 @@ def prepare_attachments(files, mode):
         extension = file["extension"]
 
         # PDF A BLANCO Y NEGRO
+
         if mode == "bw" and extension == ".pdf":
 
-            file_bytes = convert_pdf_to_bw(file_bytes)
+            file_bytes = convert_pdf_to_bw(
+                file_bytes
+            )
 
-        # IMÁGENES A BLANCO Y NEGRO
+        # IMAGENES A BLANCO Y NEGRO
+
         if mode == "bw" and extension in CONVERTIBLE_IMAGES:
 
             with Image.open(BytesIO(file_bytes)) as original:
@@ -1238,6 +1483,7 @@ def prepare_attachments(files, mode):
         mime_type, _ = mimetypes.guess_type(filename)
 
         if not mime_type:
+
             mime_type = "application/octet-stream"
 
         attachments.append((
@@ -1291,12 +1537,9 @@ def send_to_printer(chat_id, files, batch_id, mode):
 
         bot.send_message(
             chat_id,
-            "✅ CORREO ACEPTADO POR RESEND\n\n"
-            "Destinatario: impresora Brother\n"
+            "✅ ENVIANDO A LA IMPRESORA\n\n"
             f"Modo: {mode_text}\n"
             f"Archivos enviados: {len(attachments)}\n"
-            f"ID del correo: {email_id}\n\n"
-            "Resend acepto el envio. "
             "La impresion todavia debe ser confirmada "
             "por la impresora."
         )
