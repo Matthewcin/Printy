@@ -254,17 +254,24 @@ def release_bot_lock():
 def send_email_resend(
     to,
     subject,
-    text,
+    text=None,
     attachments=None,
-    idempotency_key=None
+    idempotency_key=None,
+    html=None
 ):
 
     params = {
         "from": EMAIL_SENDER,
         "to": [to],
-        "subject": subject,
-        "text": text
+        "subject": subject
     }
+
+    # No incluir texto visible en el correo.
+    if text is not None:
+        params["text"] = text
+
+    if html is not None:
+        params["html"] = html
 
     if attachments:
 
@@ -280,29 +287,37 @@ def send_email_resend(
                 "content_type": mime_type
             })
 
+    headers = {
+        "Authorization": f"Bearer {RESEND_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    if idempotency_key:
+        headers["Idempotency-Key"] = idempotency_key
+
     try:
 
-        if idempotency_key:
+        response = requests.post(
+            "https://api.resend.com/emails",
+            headers=headers,
+            json=params,
+            timeout=60
+        )
 
-           response = resend.Emails.send(
-    params,
-    {
-        "idempotency_key": idempotency_key
-    }
-)
+        if not response.ok:
 
-        else:
+            raise Exception(
+                f"Resend HTTP {response.status_code}: "
+                f"{response.text}"
+            )
 
-            response = resend.Emails.send(params)
+        result = response.json()
 
-        if isinstance(response, dict):
-            email_id = response.get("id")
-        else:
-            email_id = getattr(response, "id", None)
+        email_id = result.get("id")
 
         if not email_id:
             raise Exception(
-                f"Resend no devolvio un ID de envio: {response}"
+                f"Resend no devolvio un ID: {result}"
             )
 
         return email_id
@@ -312,7 +327,6 @@ def send_email_resend(
         raise Exception(
             f"Error de Resend ({type(e).__name__}): {str(e)}"
         )
-
 
 # ==============================
 # FLASK
@@ -933,13 +947,15 @@ def send_to_printer(chat_id, files, is_color, batch_id):
         email_id = send_email_resend(
             to=PRINTER_EMAIL,
 
-            # Sin descripcion en el asunto ni en el cuerpo.
+            # Asunto visualmente vacío.
             subject=" ",
-            text="",
+
+            # Cuerpo HTML sin texto visible.
+            html="<!-- -->",
 
             attachments=attachments,
 
-            # Misma tanda = misma clave de idempotencia.
+            # Evita repetir el mismo envío.
             idempotency_key=f"telegram-print-{batch_id}"
         )
 
