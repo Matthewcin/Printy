@@ -144,8 +144,6 @@ def process_pdf(file_bytes, mode="color", contrast=1.0, dpi=200):
 
 def generate_pdf_preview(file_bytes, mode="color", contrast=1.0):
 
-    # Se procesa con los mismos ajustes que el archivo final.
-
     processed = process_pdf(
         file_bytes,
         mode=mode,
@@ -608,6 +606,7 @@ def delete_current_preview(chat_id):
         )
 
     data["preview_message_id"] = None
+    data["preview_index"] = None
 
 
 def is_previewable(file):
@@ -670,24 +669,11 @@ def send_file_preview(chat_id, index):
             f"Contraste: {contrast:.2f}x"
         )
 
-        # Primero se envía la nueva preview.
-        # Solo si funciona se elimina la anterior.
-
-        if file["extension"] == ".pdf":
-
-            sent = bot.send_photo(
-                chat_id,
-                preview,
-                caption=caption
-            )
-
-        else:
-
-            sent = bot.send_photo(
-                chat_id,
-                preview,
-                caption=caption
-            )
+        sent = bot.send_photo(
+            chat_id,
+            preview,
+            caption=caption
+        )
 
         old_message_id = data.get("preview_message_id")
 
@@ -729,9 +715,7 @@ def next_preview_index(data, current_index):
 
     files = data["files"]
 
-    for offset in range(1, len(files) + 1):
-
-        index = (current_index + offset) % len(files)
+    for index in range(current_index + 1, len(files)):
 
         if is_previewable(files[index]):
             return index
@@ -873,22 +857,42 @@ def file_list_keyboard(data):
     return markup
 
 
-def editor_keyboard(file):
+def editor_keyboard(file, data, index):
 
     markup = types.InlineKeyboardMarkup()
 
     if is_previewable(file):
 
-        markup.row(
-            types.InlineKeyboardButton(
-                "👁 VER PREVIEW",
-                callback_data="preview_current"
-            ),
-            types.InlineKeyboardButton(
-                "⏭ SIGUIENTE ARCHIVO",
-                callback_data="preview_next"
-            )
+        next_index = next_preview_index(
+            data,
+            index
         )
+
+        if next_index is not None:
+
+            markup.row(
+                types.InlineKeyboardButton(
+                    "👁 VER PREVIEW",
+                    callback_data="preview_current"
+                ),
+                types.InlineKeyboardButton(
+                    "⏭ SIGUIENTE ARCHIVO",
+                    callback_data="preview_next"
+                )
+            )
+
+        else:
+
+            markup.row(
+                types.InlineKeyboardButton(
+                    "👁 VER PREVIEW",
+                    callback_data="preview_current"
+                ),
+                types.InlineKeyboardButton(
+                    "✅ FINALIZAR PREVIEWS",
+                    callback_data="finish_preview"
+                )
+            )
 
     markup.row(
         types.InlineKeyboardButton(
@@ -1004,7 +1008,6 @@ def show_file_list(chat_id, message_id=None):
         )
 
     text = "\n".join(lines)
-
     markup = file_list_keyboard(data)
 
     if message_id:
@@ -1033,7 +1036,12 @@ def show_file_list(chat_id, message_id=None):
     data["menu_message_id"] = sent.message_id
 
 
-def show_file_editor(chat_id, index, message_id=None):
+def show_file_editor(
+    chat_id,
+    index,
+    message_id=None,
+    preserve_snapshot=False
+):
 
     data = user_data.get(chat_id)
 
@@ -1047,10 +1055,22 @@ def show_file_editor(chat_id, index, message_id=None):
 
     data["editing_index"] = index
 
-    data["edit_snapshot"] = {
-        "mode": file["mode"],
-        "contrast": file["contrast"]
-    }
+    # Solo guardar una nueva copia al entrar en otro archivo.
+    # Al actualizar los controles del editor se conserva
+    # la copia original para que CANCELAR EDICIÓN funcione.
+
+    if (
+        not preserve_snapshot
+        or data.get("edit_snapshot") is None
+        or data.get("snapshot_index") != index
+    ):
+
+        data["edit_snapshot"] = {
+            "mode": file["mode"],
+            "contrast": file["contrast"]
+        }
+
+        data["snapshot_index"] = index
 
     mode_text = (
         "🌈 A COLOR"
@@ -1068,7 +1088,11 @@ def show_file_editor(chat_id, index, message_id=None):
         "como en la impresión."
     )
 
-    markup = editor_keyboard(file)
+    markup = editor_keyboard(
+        file,
+        data,
+        index
+    )
 
     if message_id:
 
@@ -1114,7 +1138,8 @@ def start_printing(chat_id):
         "preview_index": None,
         "menu_message_id": None,
         "editing_index": None,
-        "edit_snapshot": None
+        "edit_snapshot": None,
+        "snapshot_index": None
     }
 
     bot.send_message(
@@ -1330,6 +1355,9 @@ def handle_callbacks(call):
         data["mode"] = None
         data["default_mode"] = None
         data["collecting"] = True
+        data["editing_index"] = None
+        data["edit_snapshot"] = None
+        data["snapshot_index"] = None
 
         for file in data["files"]:
 
@@ -1435,7 +1463,8 @@ def handle_callbacks(call):
         show_file_editor(
             chat_id,
             index,
-            message_id
+            message_id,
+            preserve_snapshot=True
         )
 
     # --------------------------
@@ -1479,7 +1508,8 @@ def handle_callbacks(call):
         show_file_editor(
             chat_id,
             index,
-            message_id
+            message_id,
+            preserve_snapshot=True
         )
 
     # --------------------------
@@ -1501,6 +1531,9 @@ def handle_callbacks(call):
 
         file["mode"] = snapshot["mode"]
         file["contrast"] = snapshot["contrast"]
+
+        data["edit_snapshot"] = None
+        data["snapshot_index"] = None
 
         delete_current_preview(chat_id)
 
@@ -1536,10 +1569,10 @@ def handle_callbacks(call):
         if not data:
             return
 
-        current = data.get("preview_index")
+        current = data.get("editing_index")
 
         if current is None:
-            current = data.get("editing_index", 0)
+            return
 
         next_index = next_preview_index(
             data,
@@ -1548,16 +1581,40 @@ def handle_callbacks(call):
 
         if next_index is None:
 
-            bot.send_message(
+            delete_current_preview(chat_id)
+
+            show_file_list(
                 chat_id,
-                "No hay otros archivos con preview disponible."
+                data.get("menu_message_id")
             )
 
             return
 
+        show_file_editor(
+            chat_id,
+            next_index,
+            data.get("menu_message_id")
+        )
+
         send_file_preview(
             chat_id,
             next_index
+        )
+
+    # --------------------------
+    # FINALIZAR PREVIEWS
+    # --------------------------
+
+    elif action == "finish_preview":
+
+        if not data:
+            return
+
+        delete_current_preview(chat_id)
+
+        show_file_list(
+            chat_id,
+            data.get("menu_message_id")
         )
 
     # --------------------------
@@ -1815,8 +1872,6 @@ def prepare_attachments(files):
         mode = file.get("mode", "color")
         contrast = file.get("contrast", 1.0)
 
-        # PDF
-
         if extension == ".pdf":
 
             if mode == "bw" or contrast != 1.0:
@@ -1827,8 +1882,6 @@ def prepare_attachments(files):
                     contrast=contrast,
                     dpi=200
                 )
-
-        # IMAGENES COMPATIBLES
 
         elif extension in CONVERTIBLE_IMAGES:
 
